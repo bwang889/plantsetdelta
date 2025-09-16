@@ -1,0 +1,18 @@
+include README.md
+include LICENSE
+include pyproject.toml
+
+# Include all data files (e.g., TF features, models)
+recursive-include plantsetdelta/data *
+
+# Include all C++ source files
+recursive-include plantsetdelta/cpp *.cpp
+
+# Include all binary executable files
+recursive-include plantsetdelta/bin *
+
+# Exclude cache and temporary files
+global-exclude __pycache__ *.py[cod] *~ .DS_Store
+
+# Optionally exclude test directory if it exists
+prune tests
