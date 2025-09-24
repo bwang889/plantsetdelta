@@ -13,10 +13,8 @@
 
 using namespace std;
 
-// 定义Kmer类型为64位无符号整数
 using Kmer = uint64_t;
 
-// 将碱基字符转换为整数表示（A:0, C:1, G:2, T:3）
 inline int char_to_int(char c) {
     switch(toupper(c)) {
         case 'A': return 0;
@@ -27,7 +25,6 @@ inline int char_to_int(char c) {
     }
 }
 
-// 将整数表示的k-mer转换回字符串
 string kmerToString(Kmer kmer, int k) {
     static const char bases[] = {'A', 'C', 'G', 'T'};
     string result(k, 'A');
@@ -38,13 +35,10 @@ string kmerToString(Kmer kmer, int k) {
     return result;
 }
 
-// 定义互斥量用于线程同步
 mutex mtx;
 
-// 输出文件的全局ofstream对象
 ofstream outFile;
 
-// 处理单个序列，计算指定k值的k-mer计数
 void processSequence(const string& seq, const string& label, const vector<int>& kValues, int minCount) {
     for (int k : kValues) {
         if (k > 32) {
@@ -71,7 +65,6 @@ void processSequence(const string& seq, const string& label, const vector<int>& 
             }
         }
 
-        // 锁定输出文件，确保线程安全
         lock_guard<mutex> lock(mtx);
         for (const auto& pair : kmerCounts) {
             Kmer kmerVal = pair.first;
@@ -90,7 +83,6 @@ int main(int argc, char* argv[]) {
     int minCount = 1;
     int num_threads = 4;
 
-    // 解析命令行参数
     for (int i = 1; i < argc; ++i) {
         string arg = argv[i];
         if (arg == "-i") {
@@ -135,7 +127,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 检查必需参数
     if (filename.empty()) {
         cerr << "Error: Input file not specified (-i)" << endl;
         return 1;
@@ -149,7 +140,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 打印解析后的参数
     cout << "Input file: " << filename << endl;
     cout << "Output prefix: " << output_prefix << endl;
     cout << "Min count: " << minCount << endl;
@@ -160,14 +150,12 @@ int main(int argc, char* argv[]) {
     }
     cout << endl;
 
-    // 打开输入文件
     ifstream inFile(filename);
     if (!inFile.is_open()) {
         cerr << "Error: Cannot open input file " << filename << endl;
         return 1;
     }
 
-    // 打开输出文件
     string output_filename = output_prefix + "_kmer_counts.txt";
     outFile.open(output_filename);
     if (!outFile.is_open()) {
@@ -181,7 +169,6 @@ int main(int argc, char* argv[]) {
     string line, seq, label;
     auto start = chrono::high_resolution_clock::now();
 
-    // 读取FASTA文件中的序列
     while (getline(inFile, line)) {
         if (line.empty()) continue;
         if (line[0] == '>') {
@@ -195,24 +182,20 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 处理最后一个序列
     if (!seq.empty()) {
         sequences.emplace_back(label, seq);
     }
 
-    // 检查线程数量
     if (num_threads <= 0) {
         num_threads = thread::hardware_concurrency();
         if (num_threads == 0) num_threads = 4;
     }
 
-    // 定义队列用于存储待处理的序列
     queue<pair<string, string>> seqQueue;
     for (const auto& s : sequences) {
         seqQueue.push(s);
     }
 
-    // 定义线程函数
     auto worker = [&]() {
         while (true) {
             pair<string, string> seqPair;
@@ -228,13 +211,11 @@ int main(int argc, char* argv[]) {
         }
     };
 
-    // 创建线程池
     vector<thread> threads;
     for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back(worker);
     }
 
-    // 等待所有线程完成
     for (auto& t : threads) {
         t.join();
     }

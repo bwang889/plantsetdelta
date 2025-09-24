@@ -89,7 +89,6 @@ def generate_tss_tts_sequences(
         for g in genes:
             try:
                 tss_seq, tts_seq = extract_sequence(g, genome_dict, flank5=1000, flank3=500)
-                # 只接受长度正好1500bp的区域
                 if len(tss_seq) == 1500 and g["gene_id"] not in written_tss:
                     tss_out.write(f">{g['gene_id']}\n{tss_seq}\n")
                     written_tss.add(g["gene_id"])
