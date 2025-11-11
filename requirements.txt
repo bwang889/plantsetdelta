@@ -1,0 +1,13 @@
+# Core Python dependencies
+pandas>=2.0
+numpy>=1.22
+matplotlib<3.8
+scikit-learn>=1.4
+biopython>=1.85
+tqdm>=4.65
+click>=8.1
+requests>=2.25
+joblib>=1.2
+pyarrow>=14.0
+pycaret[full]==3.3.2
+selene-sdk>=0.4.6

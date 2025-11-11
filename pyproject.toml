@@ -1,0 +1,51 @@
+# ------------------------------------------------------------
+# Build backend
+# ------------------------------------------------------------
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ------------------------------------------------------------
+# Project metadata (PEP 621)
+# ------------------------------------------------------------
+[project]
+name = "plantsetdelta"
+version = "0.1.0"
+description = "Predict key regulatory sequence elements and TF-binding features distinguishing any two gene sets"
+readme = {file = "README.md", content-type = "text/markdown"}
+requires-python = ">=3.9,<3.11"
+license = {text = "MIT"}
+
+authors = [
+  { name = "bowang", email = "wwangb2022@163.com" }
+]
+
+dependencies = [
+  "pandas>=2.0",
+  "numpy>=1.22",
+  "matplotlib<3.8",
+  "scikit-learn>=1.4",
+  "biopython>=1.85",
+  "tqdm>=4.65",
+  "click>=8.1",
+  "requests>=2.25",
+  "joblib>=1.2",
+  "pyarrow>=14.0",
+  "pycaret[full]==3.3.2",
+  "selene-sdk>=0.4.6"
+]
+
+[project.scripts]
+psd = "plantsetdelta.cli:cli"
+
+# ------------------------------------------------------------
+# Setuptools config
+# ------------------------------------------------------------
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+plantsetdelta = ["data/**/*", "bin/*", "cpp/*.cpp"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc", "__pycache__/*"]
