@@ -1,0 +1,18 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# PyCharm
+.idea/
+
+# Logs
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
