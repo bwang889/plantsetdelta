@@ -463,6 +463,12 @@ Aggregated tables (stored at the root of `--out-dir`):
 - `top10_lollipop.pdf`  
   Lollipop plot for the top 10 features.
 
+> **Tip (interpreting TF features):** If PlantSetDelta reports top TF features, 
+> we recommend checking the corresponding pretrained DeeperDeepSEA task reliability in 
+> `TF_slide_performance.txt` (default `--sliding-window`) or `TF_no_slide_performance.txt` (when sliding-window is disabled), 
+> and interpreting TFs jointly by their **AP** and the downstream **feature importance** 
+> (e.g., using a simple combined score such as `AP × importance` to prioritize more reliable TF signals).
+
 ## Advanced recipes
 
 ### 1) Full offline workflow on HPC (recommended)
