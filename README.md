@@ -58,12 +58,28 @@ pip install plantsetdelta
 From source:
 
 ```bash
-git clone git clone https://github.com/bwang889/plantsetdelta.git
+git clone https://github.com/bwang889/plantsetdelta.git
 cd plantsetdelta
 pip install .
 ```
+### 3) Troubleshooting installation
 
-### 3) External dependency (important)
+Due to the complex dependency stack in the Python ecosystem, installation conflicts may occasionally occur in some local environments, especially when conda and pip packages are mixed. If you encounter dependency/version conflicts or fail to install PlantSetDelta successfully, you may use our preconfigured Conda environment instead.
+
+A packaged environment is available at: https://zenodo.org/records/19183728
+
+After downloading the environment archive, you can unpack and activate it as follows:
+
+```bash
+mkdir -p psd_env
+tar -xzf psd_env.tar.gz -C psd_env
+source psd_env/bin/activate
+conda-unpack
+```
+
+This packaged environment was prepared on Linux and is recommended for use on compatible Linux systems.
+
+### 4) External dependency (important)
 
 **bedtools** is required if you use Arabidopsis strict TF features computed from BED peaks (or any workflow relying on `pybedtools` intersection).
 
@@ -334,6 +350,8 @@ psd build --label labels.csv --features my_features.csv -o out_custom_features
 Notes:
 - Your feature CSV **must** contain `gene_id`
 - The build step will merge labels + features, export `raw_all_features*`, then select top features (default logic)
+
+When TF-binding signal intensity is available (e.g., peak intensity values), we recommend constructing and providing a quantitative feature matrix for training via `--features`, rather than relying only on the default binary encoding. Quantitative features may provide better predictive performance when signal information is available.
 
 ---
 
