@@ -62,13 +62,33 @@ git clone https://github.com/bwang889/plantsetdelta.git
 cd plantsetdelta
 pip install .
 ```
-### 3) Troubleshooting installation
+### 3) Troubleshooting Installation
 
-Due to the complex dependency stack in the Python ecosystem, installation conflicts may occasionally occur in some local environments, especially when conda and pip packages are mixed. If you encounter dependency/version conflicts or fail to install PlantSetDelta successfully, you may use our preconfigured Conda environment instead.
+Due to the complex dependency stack in the Python ecosystem, installation conflicts may occasionally occur in some local Linux/Conda environments. Below are solutions to the most common issues:
+
+#### Issue 1: `pkg_resources` or `selene_sdk` error during installation
+This is typically caused by recent updates in the Python `setuptools` ecosystem that break compatibility with older packages like `selene_sdk`. 
+* **Solution:** Downgrade `setuptools` to a compatible version before installing PlantSetDelta:
+
+```bash
+pip install "setuptools<60.0"
+```
+
+#### Issue 2: `libstdc++.so.6: version 'GLIBCXX_X.X.XX' not found` error
+This is a known Conda/Linux bug where the environment gets confused and tries to use the older system-level C++ compiler instead of the new one provided by Conda upon installation.
+* **Solution:** Force Conda to use its own modern C++ standard library by installing `libstdcxx-ng`:
+
+```bash
+conda install -c conda-forge libstdcxx-ng
+```
+*(Alternatively, you can manually export your conda environment's library path to `LD_LIBRARY_PATH` prior to execution).*
+
+#### The Ultimate Fallback: Preconfigured Conda Environment
+If you still encounter stubborn dependency/version conflicts or fail to install PlantSetDelta successfully, we provide a fully preconfigured Conda environment as a fallback. 
 
 A packaged environment is available at: https://zenodo.org/records/19183728
 
-After downloading the environment archive, you can unpack and activate it as follows:
+After downloading the environment archive (`psd_env.tar.gz`), you can unpack and activate it on compatible Linux systems as follows:
 
 ```bash
 mkdir -p psd_env
@@ -76,8 +96,6 @@ tar -xzf psd_env.tar.gz -C psd_env
 source psd_env/bin/activate
 conda-unpack
 ```
-
-This packaged environment was prepared on Linux and is recommended for use on compatible Linux systems.
 
 ### 4) External dependency (important)
 
