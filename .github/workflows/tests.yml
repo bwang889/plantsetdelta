@@ -14,10 +14,12 @@ jobs:
         python-version: ["3.9", "3.10"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install test dependencies
         run: python -m pip install --upgrade pip pytest pandas numpy biopython scikit-learn pybedtools
+      - name: Compile Python sources
+        run: python -m compileall -q plantsetdelta tests
       - name: Run unit tests
         run: python -m pytest -q
