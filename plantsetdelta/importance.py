@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -20,120 +21,119 @@ def export_top_features(
     out_dir: Path,
     top_n: int = 10,
 ):
+    if top_n < 1:
+        raise ValueError("top_n must be >= 1.")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(feature_csv)
     if target_col not in df.columns:
         raise ValueError(f"Target column '{target_col}' not found in: {feature_csv}")
+    X_all = df.drop(columns=[target_col, "gene_id"], errors="ignore")
+    y_all = df[target_col]
+    if X_all.empty or X_all.shape[1] == 0:
+        raise ValueError("No feature columns found.")
+    if y_all.isna().any():
+        raise ValueError("Target column contains missing labels.")
 
-    X = df.drop(columns=[target_col, "gene_id"], errors="ignore")
-    y = df[target_col]
-    feature_names = list(X.columns)
+    model_path = Path(model_path)
+    model_dir = model_path.parent / "best_models"
+    manifest_path = model_path.parent / "training_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        model_entries = manifest.get("models", [])
+        if not model_entries:
+            raise FileNotFoundError("Training manifest contains no current-run models.")
+        runs = [
+            (
+                model_path.parent / entry["model"],
+                model_path.parent / entry["training_data"],
+            )
+            for entry in model_entries
+        ]
+    else:
+        # Backward compatibility for outputs produced by older PlantSetDelta versions.
+        if not model_dir.exists():
+            raise FileNotFoundError(f"{model_dir} does not exist.")
+        runs = [(path, None) for path in sorted(model_dir.glob("best_model_*.pkl"))]
 
-    model_dir = Path(model_path).parent / "best_models"
-    if not model_dir.exists():
-        raise FileNotFoundError(f"{model_dir} does not exist. Unable to read per-seed models.")
-
-    model_files = sorted(model_dir.glob("best_model_*.pkl"))
-    if not model_files:
-        raise FileNotFoundError(f"No best_model_*.pkl found in: {model_dir}")
+    if not runs:
+        raise FileNotFoundError("No per-seed models found.")
 
     feature_stats: Dict[str, Dict[str, float]] = {}
-
-    for model_file in model_files:
+    for model_file, training_file in runs:
+        if not model_file.exists():
+            raise FileNotFoundError(f"Model listed in training manifest is missing: {model_file}")
         model_pipeline = joblib.load(model_file)
 
-        feature_imp_dict: Dict[str, float]
-
-        if hasattr(model_pipeline, "steps") and len(model_pipeline.steps) > 0:
-            estimator = model_pipeline.steps[-1][1]
+        # Use only the corresponding training partition for importance estimation;
+        # the held-out validation/test rows are not used to rank features.
+        if training_file is not None:
+            if not training_file.exists():
+                raise FileNotFoundError(f"Training partition listed in manifest is missing: {training_file}")
+            train_df = pd.read_csv(training_file)
+            if target_col not in train_df.columns:
+                raise ValueError(f"{training_file} does not contain target column {target_col}.")
+            X = train_df.drop(columns=[target_col])
+            y = train_df[target_col]
         else:
-            estimator = model_pipeline
+            X, y = X_all, y_all
 
-        if hasattr(estimator, "feature_importances_"):
-            importance = np.asarray(estimator.feature_importances_, dtype=float)
-            if importance.shape[0] != len(feature_names):
-                perm = permutation_importance(
-                    model_pipeline,
-                    X,
-                    y,
-                    n_repeats=3,
-                    random_state=1,
-                    n_jobs=1,
-                )
-                feature_imp_dict = dict(zip(feature_names, perm.importances_mean))
-            else:
-                feature_imp_dict = dict(zip(feature_names, importance))
-        elif hasattr(estimator, "coef_"):
-            coef = np.asarray(estimator.coef_, dtype=float)
-            if coef.ndim == 2:
-                coef = coef[0]
-            if coef.shape[0] != len(feature_names):
-                perm = permutation_importance(
-                    model_pipeline,
-                    X,
-                    y,
-                    n_repeats=3,
-                    random_state=1,
-                    n_jobs=1,
-                )
-                feature_imp_dict = dict(zip(feature_names, perm.importances_mean))
-            else:
-                feature_imp_dict = dict(zip(feature_names, np.abs(coef)))
-        else:
-            perm = permutation_importance(
-                model_pipeline,
-                X,
-                y,
-                n_repeats=3,
-                random_state=1,
-                n_jobs=1,
+        missing = sorted(set(X_all.columns) - set(X.columns))
+        extra = sorted(set(X.columns) - set(X_all.columns))
+        if missing or extra:
+            raise ValueError(
+                f"Feature columns do not match for {model_file}; "
+                f"missing={missing[:5]}, extra={extra[:5]}"
             )
-            feature_imp_dict = dict(zip(feature_names, perm.importances_mean))
+        X = X.loc[:, X_all.columns]
 
-        values = np.array(list(feature_imp_dict.values()), dtype=float)
-        denom = np.ptp(values)
-        if denom > 0:
-            values_norm = (values - values.min()) / denom
-        else:
-            values_norm = np.zeros_like(values)
+        # Permutation importance provides a common input-feature scale across
+        # tree, linear and non-linear estimators, including fitted selectors.
+        perm = permutation_importance(
+            model_pipeline,
+            X,
+            y,
+            n_repeats=5,
+            random_state=1,
+            n_jobs=1,
+        )
+        values = np.asarray(perm.importances_mean, dtype=float)
+        if len(values) != len(X.columns):
+            raise RuntimeError(f"Unexpected permutation-importance length for {model_file}.")
+        values = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
 
-        norm_feature_imp_dict = dict(zip(feature_imp_dict.keys(), values_norm))
+        # Convert to within-model percentile ranks so model-specific importance
+        # scales are not mixed directly.
+        ranks = pd.Series(values, index=X.columns).rank(method="average", pct=True)
+        top_features = ranks.sort_values(ascending=False).head(top_n)
+        for feature, score in top_features.items():
+            stat = feature_stats.setdefault(feature, {"count": 0.0, "total_imp": 0.0})
+            stat["count"] += 1.0
+            stat["total_imp"] += float(score)
 
-        top_feats = sorted(norm_feature_imp_dict.items(), key=lambda x: x[1], reverse=True)[:top_n]
-        for feat, imp in top_feats:
-            if feat not in feature_stats:
-                feature_stats[feat] = {"count": 0.0, "total_imp": 0.0}
-            feature_stats[feat]["count"] += 1.0
-            feature_stats[feat]["total_imp"] += float(imp)
-
-    summary_df = pd.DataFrame(
-        [
-            {
-                "Feature": feat,
-                "Count": int(stat["count"]),
-                "Avg_Importance": stat["total_imp"] / stat["count"] if stat["count"] > 0 else 0.0,
-            }
-            for feat, stat in feature_stats.items()
-        ]
-    )
-
+    summary_df = pd.DataFrame([
+        {
+            "Feature": feature,
+            "Count": int(stat["count"]),
+            "Avg_Importance": stat["total_imp"] / stat["count"],
+        }
+        for feature, stat in feature_stats.items()
+    ])
+    if summary_df.empty:
+        raise RuntimeError("No feature importance values were generated.")
     summary_df = summary_df.sort_values(
         by=["Count", "Avg_Importance"],
         ascending=[False, False],
     ).reset_index(drop=True)
 
-    top_df = (
-        summary_df.head(top_n)[["Feature", "Count", "Avg_Importance"]]
-        .sort_values(by="Avg_Importance", ascending=False)
-        .reset_index(drop=True)
-    )
+    top_df = summary_df.head(top_n)[["Feature", "Count", "Avg_Importance"]]
+    top_df = top_df.sort_values(
+        by=["Count", "Avg_Importance"], ascending=[False, False]
+    ).reset_index(drop=True)
 
     top_csv = out_dir / f"top{top_n}_features.csv"
     top_pdf = out_dir / f"top{top_n}_lollipop.pdf"
-
     top_df.to_csv(top_csv, index=False)
     save_top_features_plot(top_df, top_pdf)
-
     return top_csv, top_pdf
