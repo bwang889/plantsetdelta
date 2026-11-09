@@ -1,5 +1,4 @@
-// kmer_calculator.cpp
-
+// PlantSetDelta C++ k-mer counter. Output is sparse raw counts.
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -10,13 +9,13 @@
 #include <thread>
 #include <mutex>
 #include <queue>
+#include <cstdint>
 
 using namespace std;
-
 using Kmer = uint64_t;
 
 inline int char_to_int(char c) {
-    switch(toupper(c)) {
+    switch (toupper(static_cast<unsigned char>(c))) {
         case 'A': return 0;
         case 'C': return 1;
         case 'G': return 2;
@@ -25,206 +24,136 @@ inline int char_to_int(char c) {
     }
 }
 
-string kmerToString(Kmer kmer, int k) {
+string kmerToString(Kmer value, int k) {
     static const char bases[] = {'A', 'C', 'G', 'T'};
     string result(k, 'A');
     for (int i = k - 1; i >= 0; --i) {
-        result[i] = bases[kmer & 3];
-        kmer >>= 2;
+        result[i] = bases[value & 3];
+        value >>= 2;
     }
     return result;
 }
 
-mutex mtx;
-
+mutex queueMutex;
+mutex outputMutex;
 ofstream outFile;
 
-void processSequence(const string& seq, const string& label, const vector<int>& kValues, int minCount) {
-    for (int k : kValues) {
-        if (k > 32) {
-            cerr << "Warning: k > 32 is not supported. Skipping k = " << k << endl;
+void processSequence(const string& seq, const string& label, int k, int minCount) {
+    unordered_map<Kmer, int> counts;
+    Kmer value = 0;
+    const Kmer mask = (1ULL << (2 * k)) - 1;
+    int validBases = 0;
+
+    for (char c : seq) {
+        const int base = char_to_int(c);
+        if (base < 0) {
+            value = 0;
+            validBases = 0;
             continue;
         }
+        value = ((value << 2) | static_cast<Kmer>(base)) & mask;
+        ++validBases;
+        if (validBases >= k) ++counts[value];
+    }
 
-        unordered_map<Kmer, int> kmerCounts;
-        Kmer kmer = 0;
-        Kmer mask = (1ULL << (2 * k)) - 1;
-
-        int validBases = 0;
-        for (size_t i = 0; i < seq.length(); ++i) {
-            int base = char_to_int(seq[i]);
-            if (base == -1) {
-                kmer = 0;
-                validBases = 0;
-                continue;
-            }
-            kmer = ((kmer << 2) | base) & mask;
-            validBases++;
-            if (validBases >= k) {
-                kmerCounts[kmer]++;
-            }
-        }
-
-        lock_guard<mutex> lock(mtx);
-        for (const auto& pair : kmerCounts) {
-            Kmer kmerVal = pair.first;
-            int count = pair.second;
-            if (count >= minCount) {
-                outFile << label << "\t" << k << "\t" << kmerToString(kmerVal, k) << "\t" << count << "\n";
-            }
+    lock_guard<mutex> lock(outputMutex);
+    for (const auto& item : counts) {
+        if (item.second >= minCount) {
+            outFile << label << "\t" << k << "\t"
+                    << kmerToString(item.first, k) << "\t" << item.second << "\n";
         }
     }
 }
 
 int main(int argc, char* argv[]) {
-    string filename;
-    string output_prefix;
-    vector<int> kValues;
-    int minCount = 1;
-    int num_threads = 4;
+    string filename, outputPrefix;
+    int k = 7, minCount = 1, numThreads = 4;
 
     for (int i = 1; i < argc; ++i) {
         string arg = argv[i];
-        if (arg == "-i") {
-            if (i + 1 < argc) {
-                filename = argv[++i];
-            } else {
-                cerr << "Error: Missing argument for -i" << endl;
-                return 1;
-            }
-        } else if (arg == "-o") {
-            if (i + 1 < argc) {
-                output_prefix = argv[++i];
-            } else {
-                cerr << "Error: Missing argument for -o" << endl;
-                return 1;
-            }
-        } else if (arg == "-k") {
-            while (i + 1 < argc && argv[i+1][0] != '-') {
-                kValues.push_back(stoi(argv[++i]));
-            }
-            if (kValues.empty()) {
-                cerr << "Error: Missing k-mer sizes after -k" << endl;
-                return 1;
-            }
-        } else if (arg == "-m") {
-            if (i + 1 < argc) {
-                minCount = stoi(argv[++i]);
-            } else {
-                cerr << "Error: Missing argument for -m" << endl;
-                return 1;
-            }
-        } else if (arg == "-t") {
-            if (i + 1 < argc) {
-                num_threads = stoi(argv[++i]);
-            } else {
-                cerr << "Error: Missing argument for -t" << endl;
-                return 1;
-            }
-        } else {
+        if ((arg == "-i" || arg == "-o" || arg == "-k" || arg == "-m" || arg == "-t") && i + 1 >= argc) {
+            cerr << "Missing value for " << arg << endl;
+            return 1;
+        }
+        if (arg == "-i") filename = argv[++i];
+        else if (arg == "-o") outputPrefix = argv[++i];
+        else if (arg == "-k") k = stoi(argv[++i]);
+        else if (arg == "-m") minCount = stoi(argv[++i]);
+        else if (arg == "-t") numThreads = stoi(argv[++i]);
+        else {
             cerr << "Unknown option: " << arg << endl;
             return 1;
         }
     }
 
-    if (filename.empty()) {
-        cerr << "Error: Input file not specified (-i)" << endl;
+    if (filename.empty() || outputPrefix.empty()) {
+        cerr << "Both -i and -o are required." << endl;
         return 1;
     }
-    if (output_prefix.empty()) {
-        cerr << "Error: Output prefix not specified (-o)" << endl;
+    // The Python package currently supports k=4..7. Keep the standalone
+    // executable's accepted range identical and avoid undefined 64-bit shifts.
+    if (k < 4 || k > 7) {
+        cerr << "k must be between 4 and 7." << endl;
         return 1;
     }
-    if (kValues.empty()) {
-        cerr << "Error: K-mer sizes not specified (-k)" << endl;
+    if (minCount < 1) {
+        cerr << "Minimum count must be >= 1." << endl;
         return 1;
     }
-
-    cout << "Input file: " << filename << endl;
-    cout << "Output prefix: " << output_prefix << endl;
-    cout << "Min count: " << minCount << endl;
-    cout << "Num threads: " << num_threads << endl;
-    cout << "K-mer sizes:";
-    for (int k : kValues) {
-        cout << " " << k;
-    }
-    cout << endl;
+    if (numThreads < 1) numThreads = 1;
 
     ifstream inFile(filename);
-    if (!inFile.is_open()) {
-        cerr << "Error: Cannot open input file " << filename << endl;
+    if (!inFile) {
+        cerr << "Cannot open input FASTA: " << filename << endl;
         return 1;
     }
 
-    string output_filename = output_prefix + "_kmer_counts.txt";
-    outFile.open(output_filename);
-    if (!outFile.is_open()) {
-        cerr << "Error: Cannot open output file " << output_filename << endl;
+    const string outputName = outputPrefix + "_kmer_counts.txt";
+    outFile.open(outputName);
+    if (!outFile) {
+        cerr << "Cannot open output file: " << outputName << endl;
         return 1;
     }
     outFile << "Sequence\tK\tKMer\tCount\n";
 
     vector<pair<string, string>> sequences;
-
-    string line, seq, label;
-    auto start = chrono::high_resolution_clock::now();
-
+    string line, sequence, label;
+    bool haveRecord = false;
     while (getline(inFile, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) continue;
         if (line[0] == '>') {
-            if (!seq.empty()) {
-                sequences.emplace_back(label, seq);
-                seq.clear();
-            }
-            label = line.substr(1);
-        } else {
-            seq += line;
+            if (haveRecord) sequences.emplace_back(label, sequence);
+            string header = line.substr(1);
+            const size_t firstSpace = header.find_first_of(" \t");
+            label = header.substr(0, firstSpace); // Match Biopython record.id.
+            sequence.clear();
+            haveRecord = true;
+        } else if (haveRecord) {
+            for (char c : line) sequence.push_back(static_cast<char>(toupper(static_cast<unsigned char>(c))));
         }
     }
+    if (haveRecord) sequences.emplace_back(label, sequence);
 
-    if (!seq.empty()) {
-        sequences.emplace_back(label, seq);
-    }
-
-    if (num_threads <= 0) {
-        num_threads = thread::hardware_concurrency();
-        if (num_threads == 0) num_threads = 4;
-    }
-
-    queue<pair<string, string>> seqQueue;
-    for (const auto& s : sequences) {
-        seqQueue.push(s);
-    }
+    queue<pair<string, string>> work;
+    for (const auto& record : sequences) work.push(record);
 
     auto worker = [&]() {
         while (true) {
-            pair<string, string> seqPair;
+            pair<string, string> record;
             {
-                lock_guard<mutex> lock(mtx);
-                if (seqQueue.empty()) {
-                    break;
-                }
-                seqPair = seqQueue.front();
-                seqQueue.pop();
+                lock_guard<mutex> lock(queueMutex);
+                if (work.empty()) return;
+                record = work.front();
+                work.pop();
             }
-            processSequence(seqPair.second, seqPair.first, kValues, minCount);
+            processSequence(record.second, record.first, k, minCount);
         }
     };
 
-    vector<thread> threads;
-    for (int i = 0; i < num_threads; ++i) {
-        threads.emplace_back(worker);
-    }
-
-    for (auto& t : threads) {
-        t.join();
-    }
-
+    vector<thread> workers;
+    for (int i = 0; i < numThreads; ++i) workers.emplace_back(worker);
+    for (auto& thread : workers) thread.join();
     outFile.close();
-
-    auto end = chrono::high_resolution_clock::now();
-    chrono::duration<double> diff = end - start;
-    cerr << "Time taken: " << diff.count() << " s" << endl;
-
-    return 0;
+    return outFile ? 0 : 1;
 }
