@@ -399,7 +399,7 @@ This gives you both:
 - a **CV-based view** (robust to data splits), and
 - a **holdout-based view** (a quick sanity check on unseen data within the same dataset).
 
-> Note: The "test" results here refer to PyCaret's internal holdout set created by `setup()`, not an external test file.
+> Note: The "test" results here refer to PyCaret's internal holdout set created by `setup()`, not an external test file. Holdout results across seeds are repeated random splits of the same dataset, not independent external validations.
 
 ### Key options
 
