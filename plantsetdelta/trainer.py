@@ -161,8 +161,8 @@ def train_best_model(
         raise ValueError("No feature columns found.")
     if df[target_col].nunique() < 2:
         raise ValueError("At least two target classes are required.")
-    if df[target_col].value_counts().min() < 2:
-        raise ValueError("Each target class must contain at least two samples.")
+    if df[target_col].value_counts().min() < 3:
+        raise ValueError("Each target class must contain at least three samples for a train/holdout split and cross-validation.")
     if group_column is not None:
         if group_column not in df.columns:
             raise ValueError(f"Group column '{group_column}' not found in training data.")
@@ -188,7 +188,8 @@ def train_best_model(
             "custom_pipeline": [("label_correlation_selector", CorrelationTopKSelector())],
         }
         if group_column is None:
-            cv_folds = min(10, int(df[target_col].value_counts().min()))
+            min_class_count = int(df[target_col].value_counts().min())
+            cv_folds = min(10, max(2, int(np.floor(min_class_count * 0.7))))
             setup_kwargs.update({
                 "data": df,
                 "fold": cv_folds,
@@ -204,6 +205,7 @@ def train_best_model(
                 test_part = df.iloc[test_idx]
                 if (train_part[target_col].nunique() == df[target_col].nunique()
                     and test_part[target_col].nunique() == df[target_col].nunique()
+                    and train_part[target_col].value_counts().min() >= 2
                     and train_part[group_column].nunique() >= 2):
                     split_found = (train_idx, test_idx)
                     break
