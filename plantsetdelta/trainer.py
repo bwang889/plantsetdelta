@@ -1,19 +1,13 @@
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 from typing import Optional, Union, List, Tuple
 
 import numpy as np
 import pandas as pd
-
-from pycaret.classification import (
-    setup,
-    compare_models,
-    save_model,
-    add_metric,
-    pull,
-    predict_model,
-)
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -23,6 +17,16 @@ from sklearn.metrics import (
     cohen_kappa_score,
     matthews_corrcoef,
     roc_auc_score,
+)
+
+from pycaret.classification import (
+    setup,
+    compare_models,
+    save_model,
+    add_metric,
+    pull,
+    predict_model,
+    get_config,
 )
 
 from .visualization import save_model_metric_plots
@@ -50,97 +54,115 @@ _MODEL_ABBREV = {
 }
 
 
-def _safe_binary_auc(y_true, y_score) -> float:
+class CorrelationTopKSelector(BaseEstimator, TransformerMixin):
+    """Supervised feature selector fitted only on the current training fold."""
+
+    def __init__(self, sample_fraction: float = 0.2):
+        self.sample_fraction = sample_fraction
+
+    def fit(self, X, y):
+        if not 0 < self.sample_fraction <= 1:
+            raise ValueError("sample_fraction must be in (0, 1].")
+        frame = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+        numeric = frame.apply(pd.to_numeric, errors="coerce")
+        correlations = numeric.corrwith(pd.Series(np.asarray(y), index=numeric.index)).abs()
+        variances = numeric.var(axis=0, skipna=True)
+        valid = correlations.replace([np.inf, -np.inf], np.nan).dropna()
+        valid = valid.loc[variances.reindex(valid.index).fillna(0) > 0]
+        if valid.empty:
+            raise ValueError("No non-constant numeric features are available for supervised selection.")
+        k = max(1, int(len(frame) * self.sample_fraction))
+        k = min(k, len(valid))
+        self.selected_features_ = valid.nlargest(k).index.tolist()
+        self.feature_names_in_ = np.asarray(frame.columns, dtype=object)
+        return self
+
+    def transform(self, X):
+        if not hasattr(self, "selected_features_"):
+            raise RuntimeError("Feature selector has not been fitted.")
+        if isinstance(X, pd.DataFrame):
+            missing = [c for c in self.selected_features_ if c not in X.columns]
+            if missing:
+                raise ValueError(f"Input is missing selected features: {missing[:5]}")
+            return X.loc[:, self.selected_features_]
+        array = np.asarray(X)
+        positions = [list(self.feature_names_in_).index(c) for c in self.selected_features_]
+        return array[:, positions]
+
+    def get_feature_names_out(self, input_features=None):
+        return np.asarray(self.selected_features_, dtype=object)
+
+
+def _score_column(pred_df: pd.DataFrame, class_label) -> Optional[str]:
+    wanted = str(class_label)
+    normalized = wanted[:-2] if wanted.endswith(".0") else wanted
+    for prefix in ("prediction_score_", "Score_"):
+        for col in pred_df.columns:
+            if str(col).startswith(prefix):
+                suffix = str(col)[len(prefix):]
+                suffix_norm = suffix[:-2] if suffix.endswith(".0") else suffix
+                if suffix == wanted or suffix_norm == normalized:
+                    return col
+    return None
+
+
+def _get_probability_matrix(pred_df: pd.DataFrame, classes: list) -> Optional[np.ndarray]:
+    columns = [_score_column(pred_df, label) for label in classes]
+    if any(col is None for col in columns):
+        return None
     try:
-        uniq = pd.unique(pd.Series(y_true))
-        if len(uniq) != 2:
-            return 0.0
-        classes = sorted(list(uniq))
-        y_bin = pd.Series(y_true).map({classes[0]: 0, classes[1]: 1}).values
-        return float(roc_auc_score(y_bin, y_score))
-    except Exception:
-        return 0.0
+        scores = pred_df[columns].astype(float).to_numpy()
+    except (TypeError, ValueError):
+        return None
+    if scores.ndim != 2 or not np.isfinite(scores).all():
+        return None
+    return scores
 
 
-def _get_prob_y1(pred_df: pd.DataFrame) -> np.ndarray:
-    """
-    Return P(y=1) for binary AUC from PyCaret predict_model(..., raw_score=True).
-
-    Priority:
-      1) prediction_score_1 (your current environment)
-      2) Score_1 (other variants)
-      3) prediction_score / Score fallback with inference when necessary
-    """
-    if "prediction_score_1" in pred_df.columns:
-        return pred_df["prediction_score_1"].astype(float).values
-    if "prediction_score_1.0" in pred_df.columns:
-        return pred_df["prediction_score_1.0"].astype(float).values
-
-    if "Score_1" in pred_df.columns:
-        return pred_df["Score_1"].astype(float).values
-    if "Score_1.0" in pred_df.columns:
-        return pred_df["Score_1.0"].astype(float).values
-
-    score_col = None
-    for c in ("prediction_score", "Score"):
-        if c in pred_df.columns:
-            score_col = c
-            break
-
-    if score_col is None:
-        raise RuntimeError(
-            "No usable probability columns found. Need one of "
-            "prediction_score_1 / Score_1 / prediction_score / Score. "
-            f"Available tail cols: {list(pred_df.columns)[-30:]}"
-        )
-
-    s = pred_df[score_col].astype(float)
-
-    if float(s.min()) < 0.5:
-        return s.values
-
-    if "prediction_label" in pred_df.columns:
-        yhat = pred_df["prediction_label"].astype(int).values
-    elif "Label" in pred_df.columns:
-        yhat = pred_df["Label"].astype(int).values
-    else:
-        raise RuntimeError(
-            f"Found '{score_col}' but no prediction_label/Label to infer P(y=1). "
-            f"Available tail cols: {list(pred_df.columns)[-30:]}"
-        )
-
-    return np.where(yhat == 1, s.values, 1.0 - s.values)
-
-
-def _compute_holdout_metrics(
-    pred: pd.DataFrame,
-    target_col: str,
-) -> Tuple[float, float, float, float, float, float, float, float]:
-    y_true = pred[target_col].values
-    if "prediction_label" in pred.columns:
-        y_pred = pred["prediction_label"].values
-    elif "Label" in pred.columns:
-        y_pred = pred["Label"].values
-    else:
-        raise RuntimeError("predict_model output missing prediction_label/Label column.")
+def _compute_holdout_metrics(pred: pd.DataFrame, target_col: str):
+    y_true = pred[target_col].to_numpy()
+    label_col = "prediction_label" if "prediction_label" in pred.columns else "Label"
+    if label_col not in pred.columns:
+        raise RuntimeError("predict_model output is missing prediction_label/Label.")
+    y_pred = pred[label_col].to_numpy()
 
     acc = float(accuracy_score(y_true, y_pred))
     bacc = float(balanced_accuracy_score(y_true, y_pred))
-    rec = float(recall_score(y_true, y_pred, average="macro"))
+    rec = float(recall_score(y_true, y_pred, average="macro", zero_division=0))
     prec = float(precision_score(y_true, y_pred, average="macro", zero_division=0))
     f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
     kappa = float(cohen_kappa_score(y_true, y_pred))
     mcc = float(matthews_corrcoef(y_true, y_pred))
 
-    auc = 0.0
-    if len(pd.unique(y_true)) == 2:
-        try:
-            y_score = _get_prob_y1(pred)
-            auc = _safe_binary_auc(y_true, y_score)
-        except Exception:
-            auc = 0.0
+    classes = sorted(pd.unique(y_true).tolist(), key=lambda value: str(value))
+    auc = float("nan")
+    if len(classes) >= 2:
+        probabilities = _get_probability_matrix(pred, classes)
+        if probabilities is not None:
+            try:
+                if len(classes) == 2:
+                    auc = float(roc_auc_score(y_true, probabilities[:, 1]))
+                else:
+                    auc = float(roc_auc_score(
+                        y_true, probabilities, labels=classes,
+                        multi_class="ovr", average="macro"
+                    ))
+            except ValueError:
+                auc = float("nan")
 
     return acc, auc, rec, prec, f1, kappa, mcc, bacc
+
+
+def _clear_previous_run_outputs(models_dir: Path, results_cv_dir: Path, results_test_dir: Path):
+    # Remove only files owned by this command; preserve unrelated user files.
+    if models_dir.exists():
+        for path in models_dir.glob("best_model_*.pkl"):
+            path.unlink()
+    for folder in (results_cv_dir, results_test_dir):
+        folder.mkdir(parents=True, exist_ok=True)
+        for pattern in ("model_comparison_*_batch_*.csv", "training_data_seed_*.csv"):
+            for path in folder.glob(pattern):
+                path.unlink()
 
 
 def train_best_model(
@@ -151,29 +173,42 @@ def train_best_model(
     include_models: Optional[Union[List[str], str]] = None,
     n_jobs: int = 4,
 ) -> Path:
+    if n_runs < 1:
+        raise ValueError("n_runs must be >= 1.")
+    if n_jobs < 1:
+        raise ValueError("n_jobs must be >= 1.")
+
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
     models_dir = out_dir / "best_models"
     models_dir.mkdir(exist_ok=True)
-
     results_cv_dir = out_dir / "model_results_cv"
-    results_cv_dir.mkdir(exist_ok=True)
-
     results_test_dir = out_dir / "model_results_test"
-    results_test_dir.mkdir(exist_ok=True)
+    _clear_previous_run_outputs(models_dir, results_cv_dir, results_test_dir)
 
     df = pd.read_csv(feature_csv)
     if target_col not in df.columns:
         raise ValueError(f"Target column '{target_col}' not found in the input file.")
+    if df.empty:
+        raise ValueError("Training data is empty.")
+    if df[target_col].isna().any():
+        raise ValueError("Target column contains missing labels.")
+    if df.columns.duplicated().any():
+        raise ValueError("Training data contains duplicate column names.")
+    if df.drop(columns=[target_col]).shape[1] == 0:
+        raise ValueError("No feature columns found.")
+    if df[target_col].nunique() < 2:
+        raise ValueError("At least two target classes are required.")
+    if df[target_col].value_counts().min() < 2:
+        raise ValueError("Each target class must contain at least two samples.")
 
     model_scores = []
     all_cv_results = []
     all_test_results = []
+    manifest_models = []
 
     for seed in range(n_runs):
         print(f"Training round {seed + 1}/{n_runs} (seed={seed})...")
-
         setup(
             data=df,
             target=target_col,
@@ -181,8 +216,11 @@ def train_best_model(
             html=False,
             verbose=False,
             n_jobs=n_jobs,
+            custom_pipeline=[("label_correlation_selector", CorrelationTopKSelector())],
         )
 
+        # The selector is part of PyCaret's preprocessing pipeline. It is cloned
+        # and fitted within each CV training fold, never on that fold's validation data.
         add_metric(
             id="balanced_accuracy",
             name="Balanced Accuracy",
@@ -190,10 +228,7 @@ def train_best_model(
             greater_is_better=True,
         )
 
-        include_arg = None
-        if include_models and include_models != "all":
-            include_arg = include_models
-
+        include_arg = None if not include_models or include_models == "all" else include_models
         models_list = compare_models(
             sort="balanced_accuracy",
             include=include_arg,
@@ -201,111 +236,99 @@ def train_best_model(
         )
         if not isinstance(models_list, list):
             models_list = [models_list]
+        if not models_list:
+            raise RuntimeError("PyCaret did not return any trainable models.")
 
         cv_results = pull()
         if not isinstance(cv_results, pd.DataFrame) or cv_results.empty:
-            raise RuntimeError("PyCaret pull() returned empty results.")
+            raise RuntimeError("PyCaret pull() returned empty CV results.")
+        if "Balanced Accuracy" not in cv_results.columns:
+            raise RuntimeError("CV results do not contain Balanced Accuracy.")
 
         cv_results = cv_results.copy()
         cv_results["batch"] = seed
-        cv_path = results_cv_dir / f"model_comparison_cv_batch_{seed}.csv"
-        cv_results.to_csv(cv_path, index=False)
+        cv_results.to_csv(results_cv_dir / f"model_comparison_cv_batch_{seed}.csv", index=False)
         all_cv_results.append(cv_results)
 
         best = models_list[0]
-        best_score = 0.0
-        if "Balanced Accuracy" in cv_results.columns:
-            best_score = float(cv_results["Balanced Accuracy"].iloc[0])
+        best_score = float(cv_results["Balanced Accuracy"].iloc[0])
+        if not np.isfinite(best_score):
+            raise RuntimeError(f"Invalid CV Balanced Accuracy for seed {seed}.")
         model_scores.append((best, best_score))
 
-        save_model(best, str(models_dir / f"best_model_{seed+1}"))
+        model_name = f"best_model_{seed + 1}"
+        save_model(best, str(models_dir / model_name))
+        model_file = models_dir / f"{model_name}.pkl"
 
-        model_names = cv_results["Model"].tolist() if "Model" in cv_results.columns else [f"model_{i}" for i in range(len(models_list))]
-        n = min(len(models_list), len(model_names))
-        models_list = models_list[:n]
-        model_names = model_names[:n]
+        # Save only the training partition for later feature-importance estimation.
+        X_train = get_config("X_train")
+        y_train = get_config("y_train")
+        training_data = X_train.copy()
+        training_data[target_col] = np.asarray(y_train)
+        training_path = results_cv_dir / f"training_data_seed_{seed}.csv"
+        training_data.to_csv(training_path, index=False)
+        manifest_models.append({
+            "model": str(Path("best_models") / model_file.name),
+            "training_data": str(Path("model_results_cv") / training_path.name),
+            "seed": seed,
+            "cv_balanced_accuracy": best_score,
+        })
 
         test_rows = []
-        for m, mname in zip(models_list, model_names):
-            pred = predict_model(m, raw_score=True)
-
-            acc, auc, rec, prec, f1, kappa, mcc, bacc = _compute_holdout_metrics(
-                pred=pred,
-                target_col=target_col,
-            )
-
-            test_rows.append(
-                {
-                    "Model": mname,
-                    "Accuracy": acc,
-                    "AUC": auc,
-                    "Recall": rec,
-                    "Prec.": prec,
-                    "F1": f1,
-                    "Kappa": kappa,
-                    "MCC": mcc,
-                    "Balanced Accuracy": bacc,
-                    "batch": seed,
-                }
-            )
+        model_names = cv_results["Model"].tolist() if "Model" in cv_results.columns else []
+        for index, model in enumerate(models_list):
+            name = model_names[index] if index < len(model_names) else f"model_{index + 1}"
+            try:
+                prediction = predict_model(model, raw_score=True)
+                metrics = _compute_holdout_metrics(prediction, target_col)
+            except Exception as exc:
+                print(f"[plantsetdelta] Holdout metrics unavailable for {name}, seed {seed}: {exc}")
+                metrics = (float("nan"),) * 8
+            acc, auc, rec, prec, f1, kappa, mcc, bacc = metrics
+            test_rows.append({
+                "Model": name, "Accuracy": acc, "AUC": auc, "Recall": rec,
+                "Prec.": prec, "F1": f1, "Kappa": kappa, "MCC": mcc,
+                "Balanced Accuracy": bacc, "batch": seed,
+            })
 
         test_df = pd.DataFrame(test_rows)
-        test_path = results_test_dir / f"model_comparison_test_batch_{seed}.csv"
-        test_df.to_csv(test_path, index=False)
+        test_df.to_csv(results_test_dir / f"model_comparison_test_batch_{seed}.csv", index=False)
         all_test_results.append(test_df)
 
-    all_cv_df = pd.concat(all_cv_results, ignore_index=True) if all_cv_results else pd.DataFrame()
-    if not all_cv_df.empty:
-        if "Model" in all_cv_df.columns:
-            all_cv_df["Model"] = all_cv_df["Model"].map(lambda x: _MODEL_ABBREV.get(x, x))
-        (out_dir / "all_model_comparison_results_cv.csv").write_text("", encoding="utf-8")
-        all_cv_df.to_csv(out_dir / "all_model_comparison_results_cv.csv", index=False)
+    all_cv_df = pd.concat(all_cv_results, ignore_index=True)
+    if "Model" in all_cv_df.columns:
+        all_cv_df["Model"] = all_cv_df["Model"].map(lambda value: _MODEL_ABBREV.get(value, value))
+    all_cv_df.to_csv(out_dir / "all_model_comparison_results_cv.csv", index=False)
 
-    all_test_df = pd.concat(all_test_results, ignore_index=True) if all_test_results else pd.DataFrame()
-    if not all_test_df.empty:
-        if "Model" in all_test_df.columns:
-            all_test_df["Model"] = all_test_df["Model"].map(lambda x: _MODEL_ABBREV.get(x, x))
-        all_test_df.to_csv(out_dir / "all_model_comparison_results_test.csv", index=False)
+    all_test_df = pd.concat(all_test_results, ignore_index=True)
+    if "Model" in all_test_df.columns:
+        all_test_df["Model"] = all_test_df["Model"].map(lambda value: _MODEL_ABBREV.get(value, value))
+    all_test_df.to_csv(out_dir / "all_model_comparison_results_test.csv", index=False)
 
-    if not all_cv_df.empty:
-        if "Balanced Accuracy" in all_cv_df.columns:
+    for frame, metric, filename, title in (
+        (all_cv_df, "Balanced Accuracy", "balanced_acc_cv_plot.pdf", "Model Comparison (CV): Balanced Accuracy"),
+        (all_cv_df, "AUC", "auc_cv_plot.pdf", "Model Comparison (CV): AUC"),
+        (all_test_df, "Balanced Accuracy", "balanced_acc_test_plot.pdf", "Model Comparison (Test): Balanced Accuracy"),
+        (all_test_df, "AUC", "auc_test_plot.pdf", "Model Comparison (Test): AUC"),
+    ):
+        if metric in frame.columns and frame[metric].notna().any():
             save_model_metric_plots(
-                all_results_df=all_cv_df,
-                out_dir=out_dir,
-                metric_col="Balanced Accuracy",
-                out_pdf="balanced_acc_cv_plot.pdf",
-                title="Model Comparison (CV): Balanced Accuracy",
-            )
-        if "AUC" in all_cv_df.columns:
-            save_model_metric_plots(
-                all_results_df=all_cv_df,
-                out_dir=out_dir,
-                metric_col="AUC",
-                out_pdf="auc_cv_plot.pdf",
-                title="Model Comparison (CV): AUC",
+                all_results_df=frame, out_dir=out_dir, metric_col=metric,
+                out_pdf=filename, title=title,
             )
 
-    if not all_test_df.empty:
-        if "Balanced Accuracy" in all_test_df.columns:
-            save_model_metric_plots(
-                all_results_df=all_test_df,
-                out_dir=out_dir,
-                metric_col="Balanced Accuracy",
-                out_pdf="balanced_acc_test_plot.pdf",
-                title="Model Comparison (Test): Balanced Accuracy",
-            )
-        if "AUC" in all_test_df.columns:
-            save_model_metric_plots(
-                all_results_df=all_test_df,
-                out_dir=out_dir,
-                metric_col="AUC",
-                out_pdf="auc_test_plot.pdf",
-                title="Model Comparison (Test): AUC",
-            )
-
-    best_final, best_score = max(model_scores, key=lambda x: x[1])
+    best_final, best_score = max(model_scores, key=lambda item: item[1])
     print(f"Selecting final best model by Balanced Accuracy (CV): {best_score:.4f}")
-
     model_path = out_dir / "best_model"
     save_model(best_final, str(model_path))
+
+    manifest = {
+        "n_runs": n_runs,
+        "target": target_col,
+        "feature_selection": "absolute Pearson correlation; top max(1, floor(n_training_samples * 0.2)); fitted within each CV fold",
+        "models": manifest_models,
+    }
+    (out_dir / "training_manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
     return model_path.with_suffix(".pkl")
