@@ -115,3 +115,27 @@ def test_cli_group_disjoint_training(tmp_path):
     assert len(manifest["group_splits"]) == 1
     split = manifest["group_splits"][0]
     assert set(split["train_groups"]).isdisjoint(split["test_groups"])
+
+
+def test_binary_and_multiclass_auc_metrics():
+    import pandas as pd
+    from plantsetdelta.trainer import _compute_holdout_metrics
+
+    binary = pd.DataFrame({
+        "label": ["case", "control", "case", "control"],
+        "prediction_label": ["case", "control", "case", "control"],
+        "prediction_score_case": [0.9, 0.1, 0.8, 0.2],
+        "prediction_score_control": [0.1, 0.9, 0.2, 0.8],
+    })
+    binary_metrics = _compute_holdout_metrics(binary, "label")
+    assert binary_metrics[1] == 1.0
+
+    multiclass = pd.DataFrame({
+        "label": ["A", "B", "C", "A", "B", "C"],
+        "prediction_label": ["A", "B", "C", "A", "B", "C"],
+        "prediction_score_A": [0.9, 0.05, 0.05, 0.8, 0.1, 0.1],
+        "prediction_score_B": [0.05, 0.9, 0.05, 0.1, 0.8, 0.1],
+        "prediction_score_C": [0.05, 0.05, 0.9, 0.1, 0.1, 0.8],
+    })
+    multiclass_metrics = _compute_holdout_metrics(multiclass, "label")
+    assert multiclass_metrics[1] == 1.0
