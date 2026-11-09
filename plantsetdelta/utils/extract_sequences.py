@@ -40,15 +40,23 @@ def parse_gff_genes(gff_file: Path) -> List[dict]:
                             break
 
             if gene_id:
+                if strand not in {"+", "-"}:
+                    raise ValueError(f"Gene {gene_id} has unsupported strand: {strand}")
+                start_i, end_i = int(start), int(end)
+                if start_i < 1 or end_i < start_i:
+                    raise ValueError(f"Gene {gene_id} has invalid coordinates: {start}-{end}")
                 genes.append(
                     {
                         "chrom": chrom,
-                        "start": int(start),
-                        "end": int(end),
+                        "start": start_i,
+                        "end": end_i,
                         "strand": strand,
                         "gene_id": str(gene_id),
                     }
                 )
+    gene_ids = [g["gene_id"] for g in genes]
+    if len(gene_ids) != len(set(gene_ids)):
+        raise ValueError("Annotation contains duplicate gene IDs.")
     return genes
 
 
@@ -68,8 +76,10 @@ def _extract_window(
     seq = genome_dict[chrom].seq
 
     # convert 1-based anchor_pos to 0-based slice
-    start0 = max(anchor_pos - upstream - 1, 0)
-    end0 = anchor_pos + downstream - 1  # exclusive in slicing uses end0
+    start0 = anchor_pos - upstream - 1
+    end0 = anchor_pos + downstream - 1  # 0-based exclusive end
+    if start0 < 0 or end0 > len(seq) or end0 < start0:
+        return ""
     frag = seq[start0:end0]
 
     if strand == "-":
@@ -94,6 +104,8 @@ def extract_tss_tts_sequences(
       (tss_seq, tts_seq) where either can be None if its expected length is 0.
     """
     strand = gene["strand"]
+    if strand not in {"+", "-"}:
+        raise ValueError(f"Unsupported gene strand: {strand}")
     start = gene["start"]
     end = gene["end"]
 
@@ -163,6 +175,9 @@ def generate_tss_tts_sequences(
     genome_dict = SeqIO.to_dict(SeqIO.parse(str(genome_fa), "fasta"))
 
     written_tss, written_tts = set(), set()
+    skipped_missing_chrom = 0
+    skipped_boundary = 0
+    skipped_invalid = 0
 
     # Open only what we need
     tss_handle = open(tss_fasta, "w") if tss_fasta is not None else None
@@ -175,6 +190,7 @@ def generate_tss_tts_sequences(
                 if gene_id_whitelist is not None and g["gene_id"] not in gene_id_whitelist:
                     continue
                 if g["chrom"] not in genome_dict:
+                    skipped_missing_chrom += 1
                     continue
 
                 tss_seq, tts_seq = extract_tss_tts_sequences(
@@ -186,6 +202,10 @@ def generate_tss_tts_sequences(
                     tts_downstream=tts_downstream,
                 )
 
+                if ((tss_handle is not None and tss_seq is not None and len(tss_seq) != expected_tss_len)
+                    or (tts_handle is not None and tts_seq is not None and len(tts_seq) != expected_tts_len)):
+                    skipped_boundary += 1
+
                 if tss_handle is not None and tss_seq is not None:
                     if len(tss_seq) == expected_tss_len and g["gene_id"] not in written_tss:
                         tss_handle.write(f">{g['gene_id']}\n{tss_seq}\n")
@@ -196,8 +216,9 @@ def generate_tss_tts_sequences(
                         tts_handle.write(f">{g['gene_id']}\n{tts_seq}\n")
                         written_tts.add(g["gene_id"])
 
-            except Exception:
-                continue
+            except (ValueError, KeyError, IndexError) as exc:
+                skipped_invalid += 1
+                print(f"[plantsetdelta] Skipping gene {g.get('gene_id', '<unknown>')}: {exc}")
     finally:
         if tss_handle is not None:
             tss_handle.close()
