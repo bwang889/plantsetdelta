@@ -343,7 +343,7 @@ def train_best_model(
         "n_runs": n_runs,
         "target": target_col,
         "group_column": group_column,
-        "feature_selection": "absolute Pearson correlation; top max(1, floor(n_training_samples * 0.2)); fitted within each CV fold",
+        "feature_selection": "binary: absolute Pearson correlation; multiclass: ANOVA F-score; top max(1, floor(n_training_samples * 0.2)); fitted within each CV fold",
         "models": manifest_models,
     }
     (out_dir / "training_manifest.json").write_text(
