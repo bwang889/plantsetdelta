@@ -470,7 +470,7 @@ The validation fold and holdout set are not used to fit the selector.
 - `best_model.pkl`  
   Final selected model family by mean CV Balanced Accuracy across runs; the saved model is the highest-scoring fitted instance of that family.
 - `training_manifest.json`  
-  Records the models and corresponding training partitions from the current run.
+  Records the models and corresponding training partitions from the current run. `psd top` uses this manifest; rerun `psd train` if using an output directory created by v0.1.0.
 
 #### Result tables (CV vs test clearly separated)
 
