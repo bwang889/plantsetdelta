@@ -112,7 +112,7 @@ def _compute_holdout_metrics(pred: pd.DataFrame, target_col: str):
                         y_true, probabilities, labels=classes,
                         multi_class="ovr", average="macro"
                     ))
-            except ValueError:
+            except (ValueError, TypeError):
                 auc = float("nan")
 
     return acc, auc, rec, prec, f1, kappa, mcc, bacc
