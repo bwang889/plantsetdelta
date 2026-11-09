@@ -486,6 +486,7 @@ def build(
                     tts_upstream=tts_upstream,
                     tts_downstream=tts_downstream,
                     bin_size=BIN_SIZE,
+                    genome_fa=Path(genome_fa),
                 )
                 tf_df_tss = tf_tss_mat.reset_index().rename(columns={"index": "gene_id"}) if use_tss else _empty_gene_df()
                 tf_df_tts = tf_tts_mat.reset_index().rename(columns={"index": "gene_id"}) if use_tts else _empty_gene_df()
