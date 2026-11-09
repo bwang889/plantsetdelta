@@ -101,6 +101,7 @@ def export_top_features(
             y,
             n_repeats=5,
             random_state=1,
+            scoring="balanced_accuracy",
             n_jobs=1,
         )
         values = np.asarray(perm.importances_mean, dtype=float)
