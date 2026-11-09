@@ -1,7 +1,13 @@
+import importlib.util
+from pathlib import Path
 import pytest
 
 pytest.importorskip("pybedtools")
-from plantsetdelta.feature_engineering.ath_tf_bed import _build_bins_for_gene
+MODULE_PATH = Path(__file__).resolve().parents[1] / "plantsetdelta" / "feature_engineering" / "ath_tf_bed.py"
+SPEC = importlib.util.spec_from_file_location("plantsetdelta_ath_tf_bed_test", MODULE_PATH)
+module = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(module)
+_build_bins_for_gene = module._build_bins_for_gene
 
 
 def test_minus_strand_bins_are_numbered_in_transcript_orientation():
