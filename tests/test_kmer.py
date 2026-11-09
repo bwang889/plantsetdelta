@@ -1,11 +1,15 @@
 from pathlib import Path
 import shutil
 import subprocess
+import importlib.util
 
 import pandas as pd
 import pytest
 
-from plantsetdelta.feature_engineering import kmer
+KMER_PATH = Path(__file__).resolve().parents[1] / "plantsetdelta" / "feature_engineering" / "kmer.py"
+SPEC = importlib.util.spec_from_file_location("plantsetdelta_kmer_test", KMER_PATH)
+kmer = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(kmer)
 
 
 def test_python_kmer_ambiguity_breaks_windows():
