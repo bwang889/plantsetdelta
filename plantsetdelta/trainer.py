@@ -7,6 +7,7 @@ from typing import Optional, Union, List, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -136,6 +137,7 @@ def train_best_model(
     n_runs: int = 10,
     include_models: Optional[Union[List[str], str]] = None,
     n_jobs: int = 4,
+    group_column: Optional[str] = None,
 ) -> Path:
     if n_runs < 1:
         raise ValueError("n_runs must be >= 1.")
@@ -165,6 +167,13 @@ def train_best_model(
         raise ValueError("At least two target classes are required.")
     if df[target_col].value_counts().min() < 2:
         raise ValueError("Each target class must contain at least two samples.")
+    if group_column is not None:
+        if group_column not in df.columns:
+            raise ValueError(f"Group column '{group_column}' not found in training data.")
+        if df[group_column].isna().any():
+            raise ValueError(f"Group column '{group_column}' contains missing values.")
+        if df[group_column].nunique() < 3:
+            raise ValueError("Group-aware holdout and CV require at least three distinct groups.")
 
     model_scores = []
     all_cv_results = []
@@ -173,18 +182,52 @@ def train_best_model(
 
     for seed in range(n_runs):
         print(f"Training round {seed + 1}/{n_runs} (seed={seed})...")
-        cv_folds = min(10, int(df[target_col].value_counts().min()))
-        setup(
-            data=df,
-            target=target_col,
-            session_id=seed,
-            html=False,
-            verbose=False,
-            n_jobs=n_jobs,
-            fold=cv_folds,
-            fold_shuffle=True,
-            custom_pipeline=[("label_correlation_selector", CorrelationTopKSelector())],
-        )
+        setup_kwargs = {
+            "target": target_col,
+            "session_id": seed,
+            "html": False,
+            "verbose": False,
+            "n_jobs": n_jobs,
+            "custom_pipeline": [("label_correlation_selector", CorrelationTopKSelector())],
+        }
+        if group_column is None:
+            cv_folds = min(10, int(df[target_col].value_counts().min()))
+            setup_kwargs.update({
+                "data": df,
+                "fold": cv_folds,
+                "fold_shuffle": True,
+            })
+        else:
+            # Keep related genes in one partition for both the outer holdout
+            # and inner CV. Try multiple deterministic splits to retain all classes.
+            splitter = GroupShuffleSplit(n_splits=100, test_size=0.3, random_state=seed)
+            split_found = None
+            for train_idx, test_idx in splitter.split(df, df[target_col], groups=df[group_column]):
+                train_part = df.iloc[train_idx]
+                test_part = df.iloc[test_idx]
+                if (train_part[target_col].nunique() == df[target_col].nunique()
+                    and test_part[target_col].nunique() == df[target_col].nunique()
+                    and train_part[group_column].nunique() >= 2):
+                    split_found = (train_idx, test_idx)
+                    break
+            if split_found is None:
+                raise ValueError(
+                    f"Could not create a group-disjoint 70/30 holdout containing all classes "
+                    f"for group column '{group_column}'."
+                )
+            train_idx, test_idx = split_found
+            train_part = df.iloc[train_idx].copy()
+            test_part = df.iloc[test_idx].copy()
+            cv_folds = min(5, int(train_part[group_column].nunique()))
+            setup_kwargs.update({
+                "data": train_part,
+                "test_data": test_part,
+                "ignore_features": [group_column],
+                "fold_strategy": "groupkfold",
+                "fold_groups": group_column,
+                "fold": cv_folds,
+            })
+        setup(**setup_kwargs)
 
         # The selector is part of PyCaret's preprocessing pipeline. It is cloned
         # and fitted within each CV training fold, never on that fold's validation data.
@@ -299,6 +342,7 @@ def train_best_model(
     manifest = {
         "n_runs": n_runs,
         "target": target_col,
+        "group_column": group_column,
         "feature_selection": "absolute Pearson correlation; top max(1, floor(n_training_samples * 0.2)); fitted within each CV fold",
         "models": manifest_models,
     }
