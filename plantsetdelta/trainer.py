@@ -176,6 +176,7 @@ def train_best_model(
     all_cv_results = []
     all_test_results = []
     manifest_models = []
+    group_splits = []
 
     for seed in range(n_runs):
         print(f"Training round {seed + 1}/{n_runs} (seed={seed})...")
@@ -217,6 +218,11 @@ def train_best_model(
             train_idx, test_idx = split_found
             train_part = df.iloc[train_idx].copy()
             test_part = df.iloc[test_idx].copy()
+            group_splits.append({
+                "seed": seed,
+                "train_groups": sorted(train_part[group_column].astype(str).unique().tolist()),
+                "test_groups": sorted(test_part[group_column].astype(str).unique().tolist()),
+            })
             cv_folds = min(5, int(train_part[group_column].nunique()))
             setup_kwargs.update({
                 "data": train_part,
@@ -344,6 +350,7 @@ def train_best_model(
         "n_runs": n_runs,
         "target": target_col,
         "group_column": group_column,
+        "group_splits": group_splits,
         "feature_selection": "binary: absolute Pearson correlation; multiclass: ANOVA F-score; top max(1, floor(n_training_samples * 0.2)); fitted within each CV fold",
         "models": manifest_models,
     }
