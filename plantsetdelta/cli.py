@@ -121,6 +121,8 @@ def _validate_gene_table(df: pd.DataFrame, name: str, require_label: bool = Fals
     if not required.issubset(df.columns):
         raise click.BadParameter(f"{name} must contain columns: {', '.join(sorted(required))}")
     out = df.copy()
+    if out["gene_id"].isna().any():
+        raise click.BadParameter(f"{name} contains missing gene_id values.")
     out["gene_id"] = out["gene_id"].astype(str).str.strip()
     if out["gene_id"].eq("").any():
         raise click.BadParameter(f"{name} contains empty gene_id values.")
