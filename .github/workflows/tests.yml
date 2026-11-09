@@ -36,7 +36,7 @@ jobs:
       - name: Check test results
         if: always()
         run: |
-          test "${{ steps.kmer.outcome }}" = success
-          test "${{ steps.selector.outcome }}" = success
-          test "${{ steps.sequence.outcome }}" = success
-          test "${{ steps.tfbins.outcome }}" = success
+          test "${{ steps.kmer.conclusion }}" = success
+          test "${{ steps.selector.conclusion }}" = success
+          test "${{ steps.sequence.conclusion }}" = success
+          test "${{ steps.tfbins.conclusion }}" = success
