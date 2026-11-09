@@ -7,7 +7,6 @@ from typing import Optional, Union, List, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -30,6 +29,7 @@ from pycaret.classification import (
 )
 
 from .visualization import save_model_metric_plots
+from .feature_selection import CorrelationTopKSelector
 
 __all__ = ["train_best_model"]
 
@@ -52,45 +52,6 @@ _MODEL_ABBREV = {
     "Decision Tree Classifier": "dt",
     "Dummy Classifier": "dummy",
 }
-
-
-class CorrelationTopKSelector(BaseEstimator, TransformerMixin):
-    """Supervised feature selector fitted only on the current training fold."""
-
-    def __init__(self, sample_fraction: float = 0.2):
-        self.sample_fraction = sample_fraction
-
-    def fit(self, X, y):
-        if not 0 < self.sample_fraction <= 1:
-            raise ValueError("sample_fraction must be in (0, 1].")
-        frame = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-        numeric = frame.apply(pd.to_numeric, errors="coerce")
-        correlations = numeric.corrwith(pd.Series(np.asarray(y), index=numeric.index)).abs()
-        variances = numeric.var(axis=0, skipna=True)
-        valid = correlations.replace([np.inf, -np.inf], np.nan).dropna()
-        valid = valid.loc[variances.reindex(valid.index).fillna(0) > 0]
-        if valid.empty:
-            raise ValueError("No non-constant numeric features are available for supervised selection.")
-        k = max(1, int(len(frame) * self.sample_fraction))
-        k = min(k, len(valid))
-        self.selected_features_ = valid.nlargest(k).index.tolist()
-        self.feature_names_in_ = np.asarray(frame.columns, dtype=object)
-        return self
-
-    def transform(self, X):
-        if not hasattr(self, "selected_features_"):
-            raise RuntimeError("Feature selector has not been fitted.")
-        if isinstance(X, pd.DataFrame):
-            missing = [c for c in self.selected_features_ if c not in X.columns]
-            if missing:
-                raise ValueError(f"Input is missing selected features: {missing[:5]}")
-            return X.loc[:, self.selected_features_]
-        array = np.asarray(X)
-        positions = [list(self.feature_names_in_).index(c) for c in self.selected_features_]
-        return array[:, positions]
-
-    def get_feature_names_out(self, input_features=None):
-        return np.asarray(self.selected_features_, dtype=object)
 
 
 def _score_column(pred_df: pd.DataFrame, class_label) -> Optional[str]:
