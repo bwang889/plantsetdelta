@@ -599,13 +599,14 @@ def build(
 @click.option("--n-runs", type=int, default=10, show_default=True, help="Number of training runs (seeds 0..n-1).")
 # Control PyCaret parallelism; set lower values on shared clusters to avoid oversubscription.
 @click.option("--n-jobs", type=int, default=4, show_default=True, help="Number of CPU cores for PyCaret training.")
+@click.option("--group-column", type=str, default=None, help="Optional gene-family/sequence-cluster column for group-disjoint holdout and CV.")
 @click.option(
     "--ml-models",
     multiple=True,
     default=["xgboost", "nb", "lr", "gbc", "rf"],
     help="Subset of models to include. Example: --ml-models nb rf gbc; use 'all' to include all models.",
 )
-def train(data, out_dir, n_runs, n_jobs, ml_models):
+def train(data, out_dir, n_runs, n_jobs, ml_models, group_column):
     """Train multiple models and select the best one. Also exports per-seed model comparisons and ACC/AUC plots."""
     include_models = "all" if (len(ml_models) == 1 and ml_models[0] == "all") else list(ml_models)
 
@@ -616,6 +617,7 @@ def train(data, out_dir, n_runs, n_jobs, ml_models):
         n_runs=n_runs,
         include_models=include_models,
         n_jobs=n_jobs,
+        group_column=group_column,
     )
     click.echo(f"Model training complete. Best model saved to: {model_path}")
 
