@@ -446,12 +446,7 @@ Depending on your build configuration (species, intervals, TSS/TTS enabled, `--s
   - `raw_kmer_tss.csv`, `raw_kmer_tts.csv`
   - `raw_tf_tss.csv`, `raw_tf_tts.csv`
 
-#### Notes on built-in feature selection during build
-
-During `psd build`, features are filtered to:
-
-- `top_n = max(1, int(n_samples * 0.2))`
-- by absolute Pearson correlation with `label`
+#### Feature selection during training
 
 Supervised feature selection is performed during `psd train`, not during `psd build`. The selector is fitted
 within each cross-validation training fold and uses the top `max(1, floor(n_training_samples * 0.2))`
