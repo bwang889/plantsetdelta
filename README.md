@@ -405,6 +405,7 @@ This gives you both:
 
 - `--n-runs`: number of training runs (seeds 0..n_runs-1; default 10)
 - `--n-jobs`: number of CPU cores used by PyCaret (default 4)
+- `--group-column`: optional gene-family or sequence-cluster column. When supplied, both the outer holdout and inner cross-validation keep each group entirely within one partition.
 - `--ml-models`: restrict the model set (repeatable). Example:
 
 ```bash
