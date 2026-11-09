@@ -78,12 +78,7 @@ def _build_bins_for_gene(
     if region_start_1based < 1 or (chrom_length is not None and region_end_1based > chrom_length):
         return []
 
-    # bed start is 0-based, end is 1-based exclusive
-    # we treat bins as [start, end) in bed coordinates
-    # Match sequence extraction: do not clip a partial upstream window at
-    # coordinate 1, because the corresponding FASTA record is skipped.
-    if region_start_1based < 1:
-        return []
+    # BED intervals are 0-based, half-open.
     region_start0 = region_start_1based - 1
 
     bins = []
