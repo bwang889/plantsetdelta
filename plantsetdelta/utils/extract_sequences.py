@@ -225,4 +225,10 @@ def generate_tss_tts_sequences(
         if tts_handle is not None:
             tts_handle.close()
 
+    print(
+        "[plantsetdelta] Sequence extraction summary: "
+        f"genes={len(genes)}, TSS={len(written_tss)}, TTS={len(written_tts)}, "
+        f"missing_chromosome={skipped_missing_chrom}, boundary={skipped_boundary}, "
+        f"invalid={skipped_invalid}"
+    )
     return {"tss_fasta": tss_fasta, "tts_fasta": tts_fasta}
