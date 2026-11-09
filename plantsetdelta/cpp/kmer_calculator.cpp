@@ -130,7 +130,11 @@ int main(int argc, char* argv[]) {
             sequence.clear();
             haveRecord = true;
         } else if (haveRecord) {
-            for (char c : line) sequence.push_back(static_cast<char>(toupper(static_cast<unsigned char>(c))));
+            for (char c : line) {
+                if (!isspace(static_cast<unsigned char>(c))) {
+                    sequence.push_back(static_cast<char>(toupper(static_cast<unsigned char>(c))));
+                }
+            }
         }
     }
     if (haveRecord) sequences.emplace_back(label, sequence);
