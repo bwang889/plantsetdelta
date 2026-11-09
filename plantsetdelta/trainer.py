@@ -262,9 +262,13 @@ def train_best_model(
 
         # Save only the training partition for later feature-importance estimation.
         X_train = get_config("X_train")
-        y_train = get_config("y_train")
-        training_data = X_train.copy()
-        training_data[target_col] = np.asarray(y_train)
+        train_index = getattr(X_train, "index", None)
+        if train_index is None or not train_index.isin(df.index).all():
+            raise RuntimeError(
+                "PyCaret did not expose original training-row indices; cannot save a "
+                "leakage-free training partition for feature-importance analysis."
+            )
+        training_data = df.loc[train_index].copy()
         training_path = results_cv_dir / f"training_data_seed_{seed}.csv"
         training_data.to_csv(training_path, index=False)
         manifest_models.append({
