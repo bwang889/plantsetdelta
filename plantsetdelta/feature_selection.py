@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.feature_selection import f_classif
 
 
 class CorrelationTopKSelector(BaseEstimator, TransformerMixin):
@@ -16,10 +17,18 @@ class CorrelationTopKSelector(BaseEstimator, TransformerMixin):
             raise ValueError("sample_fraction must be in (0, 1].")
         frame = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         numeric = frame.apply(pd.to_numeric, errors="coerce")
-        target = pd.Series(np.asarray(y), index=numeric.index)
-        correlations = numeric.corrwith(target).abs()
+        target = pd.Series(np.asarray(y).reshape(-1), index=numeric.index)
         variances = numeric.var(axis=0, skipna=True)
-        valid = correlations.replace([np.inf, -np.inf], np.nan).dropna()
+        if target.nunique() == 2:
+            # For binary labels, absolute Pearson correlation is invariant to
+            # which class is encoded as 0 or 1.
+            encoded = pd.Series(pd.factorize(target)[0], index=target.index)
+            scores = numeric.corrwith(encoded).abs()
+        else:
+            # Pearson correlation is not suitable for nominal multiclass labels.
+            scores, _ = f_classif(numeric, target)
+            scores = pd.Series(scores, index=numeric.columns)
+        valid = scores.replace([np.inf, -np.inf], np.nan).dropna()
         valid = valid.loc[variances.reindex(valid.index).fillna(0) > 0]
         if valid.empty:
             raise ValueError("No non-constant numeric features are available for supervised selection.")
