@@ -16,3 +16,7 @@ dist/
 # OS junk
 .DS_Store
 Thumbs.db
+# Compiled native extensions and local runtime cache
+plantsetdelta/bin/
+*.so
+*.o
