@@ -73,7 +73,7 @@ This is typically caused by recent updates in the Python `setuptools` ecosystem 
 * **Solution:** Downgrade `setuptools` to a compatible version before installing PlantSetDelta:
 
 ```bash
-pip install "setuptools<60.0"
+pip install "setuptools>=61,<81"
 ```
 
 #### Issue 2: `libstdc++.so.6: version 'GLIBCXX_X.X.XX' not found` error
