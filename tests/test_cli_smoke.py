@@ -139,3 +139,41 @@ def test_binary_and_multiclass_auc_metrics():
     })
     multiclass_metrics = _compute_holdout_metrics(multiclass, "label")
     assert multiclass_metrics[1] == 1.0
+
+
+def test_cli_precomputed_species_build_modes(tmp_path):
+    import pandas as pd
+
+    cache = tmp_path / "cache"
+    species_dir = cache / "arabidopsis"
+    species_dir.mkdir(parents=True)
+    labels_path = tmp_path / "precomputed_labels.csv"
+    genes = [f"AT{i:05d}" for i in range(1, 11)]
+    pd.DataFrame({"gene_id": genes, "label": [i % 2 for i in range(10)]}).to_csv(labels_path, index=False)
+
+    kmer_tss = pd.DataFrame({"sequence": genes, "AAAAA": range(10), "CCCCC": range(10, 20)})
+    kmer_tts = pd.DataFrame({"sequence": genes, "GGGGG": range(20, 30), "TTTTT": range(30, 40)})
+    tf = pd.DataFrame({"gene_id": genes, "WRKY42_bin_1": range(10), "NAC_bin_1": range(10, 20)})
+    kmer_tss.to_parquet(species_dir / "kmer_tss.parquet", index=False)
+    kmer_tts.to_parquet(species_dir / "kmer_tts.parquet", index=False)
+    tf.to_parquet(species_dir / "tf_tss_slide.parquet", index=False)
+    tf.to_parquet(species_dir / "tf_tts_slide.parquet", index=False)
+    tf.to_parquet(species_dir / "tf_tss.parquet", index=False)
+    tf.to_parquet(species_dir / "tf_tts.parquet", index=False)
+
+    env = os.environ.copy()
+    env["PSD_DATA_DIR"] = str(cache)
+    env["MPLBACKEND"] = "Agg"
+
+    for mode, output_name in (("yes", "precomputed_slide"), ("no", "precomputed_strict")):
+        output_dir = tmp_path / output_name
+        subprocess.run(
+            [sys.executable, "-m", "plantsetdelta.cli", "build",
+             "--species", "ath", "--label", str(labels_path),
+             "--sliding-window", mode, "-o", str(output_dir)],
+            check=True, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=600,
+        )
+        matrix = pd.read_csv(output_dir / "train_data.csv")
+        assert matrix.shape == (10, 9)
+        assert "AAAAA_tss" in matrix.columns
+        assert "WRKY42_bin_1_tss" in matrix.columns
