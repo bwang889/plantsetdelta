@@ -3,6 +3,8 @@
 
 PlantSetDelta (psd) is a command-line toolkit for identifying regulatory sequence features that distinguish **any two (or multiple) gene sets** across plant species. It builds a feature matrix from regulatory regions around **TSS** and **TTS**, trains classical ML models via **PyCaret**, and exports interpretable **top features**.
 
+Current release: **v0.2.0**.
+
 This repository provides:
 - **k-mer** features (fast C++ backend; optional Python fallback)
 - **TF-binding** features:
@@ -450,8 +452,9 @@ During `psd build`, features are filtered to:
 - `top_n = max(1, int(n_samples * 0.2))`
 - by absolute Pearson correlation with `label`
 
-This reduces dimensionality for classical ML training. If you want to change this behavior, modify the feature-selection
-section in `plantsetdelta/cli.py`.
+Supervised feature selection is performed during `psd train`, not during `psd build`. The selector is fitted
+within each cross-validation training fold and uses the top `max(1, floor(n_training_samples * 0.2))`
+features by absolute Pearson correlation. The validation fold and holdout set are not used to fit the selector.
 
 ### 2) Training outputs (`psd train`)
 
@@ -464,6 +467,8 @@ section in `plantsetdelta/cli.py`.
 
 - `best_model.pkl`  
   Final selected model across runs, chosen by CV Balanced Accuracy.
+- `training_manifest.json`  
+  Records the models and corresponding training partitions from the current run.
 
 #### Result tables (CV vs test clearly separated)
 
@@ -494,7 +499,7 @@ Aggregated tables (stored at the root of `--out-dir`):
 ### 3) Feature interpretation outputs (`psd top`)
 
 - `top10_features.csv`  
-  Top 10 features, aggregated across per-seed best models.
+  Top 10 features, aggregated across per-seed best models using permutation importance calculated on each model's training partition.
 
 - `top10_lollipop.pdf`  
   Lollipop plot for the top 10 features.
