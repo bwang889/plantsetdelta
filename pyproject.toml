@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 # ------------------------------------------------------------
 [project]
 name = "plantsetdelta"
-version = "0.1.0"
+version = "0.2.0"
 description = "Predict key regulatory sequence elements and TF-binding features distinguishing any two gene sets"
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.9,<3.11"
@@ -30,6 +30,7 @@ dependencies = [
   "click>=8.1",
   "requests>=2.25",
   "joblib>=1.2",
+  "setuptools>=61,<81",
   "pyarrow>=14.0",
   "pycaret[full]==3.3.2",
   "selene-sdk>=0.4.6",

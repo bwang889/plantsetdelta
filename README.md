@@ -3,6 +3,8 @@
 
 PlantSetDelta (psd) is a command-line toolkit for identifying regulatory sequence features that distinguish **any two (or multiple) gene sets** across plant species. It builds a feature matrix from regulatory regions around **TSS** and **TTS**, trains classical ML models via **PyCaret**, and exports interpretable **top features**.
 
+Current release: **v0.2.0**.
+
 This repository provides:
 - **k-mer** features (fast C++ backend; optional Python fallback)
 - **TF-binding** features:
@@ -71,7 +73,7 @@ This is typically caused by recent updates in the Python `setuptools` ecosystem 
 * **Solution:** Downgrade `setuptools` to a compatible version before installing PlantSetDelta:
 
 ```bash
-pip install "setuptools<60.0"
+pip install "setuptools>=61,<81"
 ```
 
 #### Issue 2: `libstdc++.so.6: version 'GLIBCXX_X.X.XX' not found` error
@@ -115,7 +117,7 @@ PlantSetDelta uses a local cache directory for large files (parquet features, de
 
 - Environment variable: `PSD_DATA_DIR`
 
-If not set, the package uses its internal `plantsetdelta/data` directory (not recommended for cluster usage).
+If not set, the package uses `~/.cache/plantsetdelta/data`.
 
 ### Recommended on HPC
 
@@ -397,12 +399,13 @@ This gives you both:
 - a **CV-based view** (robust to data splits), and
 - a **holdout-based view** (a quick sanity check on unseen data within the same dataset).
 
-> Note: The "test" results here refer to PyCaret's internal holdout set created by `setup()`, not an external test file.
+> Note: The "test" results here refer to PyCaret's internal holdout set created by `setup()`, not an external test file. Holdout results across seeds are repeated random splits of the same dataset, not independent external validations.
 
 ### Key options
 
 - `--n-runs`: number of training runs (seeds 0..n_runs-1; default 10)
 - `--n-jobs`: number of CPU cores used by PyCaret (default 4)
+- `--group-column`: optional gene-family or sequence-cluster column. When supplied, both the outer holdout and inner cross-validation keep each group entirely within one partition.
 - `--ml-models`: restrict the model set (repeatable). Example:
 
 ```bash
@@ -443,15 +446,12 @@ Depending on your build configuration (species, intervals, TSS/TTS enabled, `--s
   - `raw_kmer_tss.csv`, `raw_kmer_tts.csv`
   - `raw_tf_tss.csv`, `raw_tf_tts.csv`
 
-#### Notes on built-in feature selection during build
+#### Feature selection during training
 
-During `psd build`, features are filtered to:
-
-- `top_n = max(1, int(n_samples * 0.2))`
-- by absolute Pearson correlation with `label`
-
-This reduces dimensionality for classical ML training. If you want to change this behavior, modify the feature-selection
-section in `plantsetdelta/cli.py`.
+Supervised feature selection is performed during `psd train`, not during `psd build`. The selector is fitted
+within each cross-validation training fold and uses the top `max(1, floor(n_training_samples * 0.2))`
+features by absolute Pearson correlation for binary labels or ANOVA F-score for multiclass labels.
+The validation fold and holdout set are not used to fit the selector.
 
 ### 2) Training outputs (`psd train`)
 
@@ -459,20 +459,22 @@ section in `plantsetdelta/cli.py`.
 
 #### Model files
 
-- `best_models/best_model_<i>.pkl`  
-  Best model per run (seed), where `i` starts at 1.
+- `best_models/best_model_<run_id>_<i>.pkl`  
+  Best model per run (seed), where `i` starts at 1. Run-specific names keep earlier model files from being overwritten.
 
 - `best_model.pkl`  
-  Final selected model across runs, chosen by CV Balanced Accuracy.
+  Final selected model family by mean CV Balanced Accuracy across runs; the saved model is the highest-scoring fitted instance of that family.
+- `training_manifest.json`  
+  Records the models and corresponding training partitions from the current run. `psd top` uses this manifest; rerun `psd train` if using an output directory created by v0.1.0.
 
 #### Result tables (CV vs test clearly separated)
 
 Per-seed tables (stored under `model_results/`):
 
-- `model_results/model_comparison_cv_batch_<seed>.csv`  
+- `model_results_cv/model_comparison_cv_batch_<seed>.csv`  
   Training-set cross-validation comparison for that seed.
 
-- `model_results/model_comparison_test_batch_<seed>.csv`  
+- `model_results_test/model_comparison_test_batch_<seed>.csv`  
   Holdout test comparison for that seed.
 
 Aggregated tables (stored at the root of `--out-dir`):
@@ -494,7 +496,7 @@ Aggregated tables (stored at the root of `--out-dir`):
 ### 3) Feature interpretation outputs (`psd top`)
 
 - `top10_features.csv`  
-  Top 10 features, aggregated across per-seed best models.
+  Top 10 features, aggregated across per-seed best models using permutation importance calculated on each model's training partition.
 
 - `top10_lollipop.pdf`  
   Lollipop plot for the top 10 features.

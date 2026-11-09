@@ -114,41 +114,37 @@ def build_tf_matrix(
 
         # robust read
         df = pd.read_csv(result_file, sep="\t")
-
-        # Determine IDs column (sequence name)
-        id_series = None
-        id_col = None
-
-        if "name" in df.columns:
+        if df.empty:
+            raise ValueError("Selene prediction table is empty.")
+        id_candidates = [
+            column for column in df.columns
+            if df[column].astype(str).str.match(r".+_bin_\d+$").all()
+        ]
+        if "name" in id_candidates:
             id_col = "name"
-            id_series = df["name"].astype(str)
+        elif id_candidates:
+            id_col = id_candidates[0]
         else:
-            # sometimes first column is the id column (e.g. unnamed)
-            first_col = df.columns[0]
-            if df[first_col].dtype == object:
-                id_col = first_col
-                id_series = df[first_col].astype(str)
-            else:
-                # fallback: try read as index
-                df2 = pd.read_csv(result_file, sep="\t", index_col=0)
-                id_series = df2.index.astype(str)
-                df = df2.reset_index().rename(columns={"index": "name"})
-                id_col = "name"
-                id_series = df["name"].astype(str)
-
-        # Parse gene_id and bin from ids
-        parsed = id_series.str.extract(r"(.*)_bin_(\d+)$")
+            raise ValueError(
+                "Cannot identify sequence-name column in Selene output. "
+                f"Columns: {list(df.columns)}"
+            )
+        id_series = df[id_col].astype(str)
+        parsed = id_series.str.extract(r"^(.*)_bin_(\d+)$")
+        if parsed.isna().any().any():
+            raise ValueError("Malformed sequence IDs in Selene prediction output.")
         df["gene_id"] = parsed[0]
-        df["bin"] = parsed[1].astype(float)
-
-        df = df.dropna(subset=["gene_id", "bin"])
-        df["bin"] = df["bin"].astype(int)
+        df["bin"] = parsed[1].astype(int)
 
         # Feature columns
         exclude = {id_col, "gene_id", "bin"}
         feature_cols = [c for c in df.columns if c not in exclude]
 
         # Step 5: Pivot to TF_bin columns
+        if not feature_cols:
+            raise ValueError("Selene output contains no TF prediction columns.")
+        if df.duplicated(["gene_id", "bin"]).any():
+            raise ValueError("Selene output contains duplicate gene_id/bin predictions.")
         long = df.set_index(["gene_id", "bin"])[feature_cols]
         wide = long.unstack("bin")  # MultiIndex columns (feature, bin)
         wide.columns = [f"{tf}_bin_{b}" for tf, b in wide.columns]

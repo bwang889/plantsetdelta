@@ -55,6 +55,7 @@ def _build_bins_for_gene(
     anchor: int,
     strand: str,
     bin_size: int,
+    chrom_length: int | None = None,
 ) -> List[Tuple[str, int, int, str]]:
     """
     Create bins (BED intervals) for one region around an anchor.
@@ -65,20 +66,29 @@ def _build_bins_for_gene(
 
     if strand == "+":
         region_start_1based = anchor - upstream
+        region_end_1based = anchor + downstream - 1
     else:
         # on minus strand, upstream relative to gene direction corresponds to genomic downstream
         # region in genome coords is [anchor - downstream, anchor + upstream]
         region_start_1based = anchor - downstream
+        region_end_1based = anchor + upstream - 1
 
-    # bed start is 0-based, end is 1-based exclusive
-    # we treat bins as [start, end) in bed coordinates
-    region_start0 = max(region_start_1based - 1, 0)
+    # Match the FASTA extractor: skip a whole window if it crosses either
+    # chromosome boundary rather than creating partial BED bins.
+    if region_start_1based < 1 or (chrom_length is not None and region_end_1based > chrom_length):
+        return []
+
+    # BED intervals are 0-based, half-open.
+    region_start0 = region_start_1based - 1
 
     bins = []
     for i in range(n_bins):
         b0 = region_start0 + i * bin_size
         b1 = b0 + bin_size
-        name = f"{gene['gene_id']}_bin_{i+1}"
+        # Number bins in transcript orientation (the FASTA is reverse-complemented
+        # for minus-strand genes).
+        bin_number = (n_bins - i) if strand == "-" else (i + 1)
+        name = f"{gene['gene_id']}_bin_{bin_number}"
         bins.append((gene["chrom"], b0, b1, name))
     return bins
 
@@ -93,12 +103,27 @@ def build_ath_tf_matrix_from_bed(
     bin_size: int = 100,
     min_frac_overlap: float = 0.8,
     batch_bins: int = 10000,
+    genome_fa: Path | None = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     if (tss_upstream % bin_size) or (tss_downstream % bin_size) or (tts_upstream % bin_size) or (tts_downstream % bin_size):
         raise ValueError("All interval params must be multiples of bin_size (default 100).")
 
     genes = _parse_gff_genes_min(gff_file)
+    chrom_lengths = None
+    if genome_fa is not None:
+        from Bio import SeqIO
+        chrom_lengths = {record.id: len(record.seq) for record in SeqIO.parse(str(genome_fa), "fasta")}
+    gene_ids = [g["gene_id"] for g in genes]
+    if len(gene_ids) != len(set(gene_ids)):
+        raise ValueError("GFF/GTF contains duplicate gene IDs; TF bins require unique gene IDs.")
+    invalid_strands = sorted({g["strand"] for g in genes if g["strand"] not in {"+", "-"}})
+    if invalid_strands:
+        raise ValueError(f"Unsupported gene strand values: {invalid_strands}")
+    if batch_bins < 1:
+        raise ValueError("batch_bins must be >= 1")
+    if not 0 <= min_frac_overlap <= 1:
+        raise ValueError("min_frac_overlap must be between 0 and 1")
     tf_bed = pybedtools.BedTool(str(tf_bed_file))
 
     # Prepare TSS/TTS bins as BED lines
@@ -109,14 +134,16 @@ def build_ath_tf_matrix_from_bed(
         if strand == "+":
             tss_anchor = g["start"]
             tts_anchor = g["end"]
-            tss_bins.extend(_build_bins_for_gene(g, tss_upstream, tss_downstream, tss_anchor, "+", bin_size))
-            tts_bins.extend(_build_bins_for_gene(g, tts_upstream, tts_downstream, tts_anchor, "+", bin_size))
+            chrom_length = chrom_lengths.get(g["chrom"]) if chrom_lengths is not None else None
+            tss_bins.extend(_build_bins_for_gene(g, tss_upstream, tss_downstream, tss_anchor, "+", bin_size, chrom_length))
+            tts_bins.extend(_build_bins_for_gene(g, tts_upstream, tts_downstream, tts_anchor, "+", bin_size, chrom_length))
         else:
             tss_anchor = g["end"]
             tts_anchor = g["start"]
             # minus strand uses swapped logic inside _build_bins_for_gene
-            tss_bins.extend(_build_bins_for_gene(g, tss_upstream, tss_downstream, tss_anchor, "-", bin_size))
-            tts_bins.extend(_build_bins_for_gene(g, tts_upstream, tts_downstream, tts_anchor, "-", bin_size))
+            chrom_length = chrom_lengths.get(g["chrom"]) if chrom_lengths is not None else None
+            tss_bins.extend(_build_bins_for_gene(g, tss_upstream, tss_downstream, tss_anchor, "-", bin_size, chrom_length))
+            tts_bins.extend(_build_bins_for_gene(g, tts_upstream, tts_downstream, tts_anchor, "-", bin_size, chrom_length))
 
     def _compute_matrix(bins: List[Tuple[str, int, int, str]], label: str) -> pd.DataFrame:
         intersect_data: Set[Tuple[str, str, int]] = set()  # (gene_id, tf_name, bin_num)

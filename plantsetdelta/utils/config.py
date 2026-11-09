@@ -4,12 +4,12 @@ import importlib.resources
 import requests
 from tqdm import tqdm
 
-from plantsetdelta import DATA_DIR
-
 # -----------------------------
-# Default internal data directory
+# Default user-writable cache directory
 # -----------------------------
-ENV_DATA_DIR = Path(os.environ.get("PSD_DATA_DIR", DATA_DIR))
+ENV_DATA_DIR = Path(
+    os.environ.get("PSD_DATA_DIR", Path.home() / ".cache" / "plantsetdelta" / "data")
+).expanduser()
 
 # -----------------------------
 # Default intervals & bin size
@@ -104,70 +104,61 @@ SPECIES_DATA_FILES = {
 # Download helpers (ONLY used in psd download)
 # -----------------------------
 def _download_file(url: str, local_path: Path, desc: str):
-    """
-    Robust downloader for Zenodo:
-      - Use a browser-like User-Agent to avoid occasional 403 against python-requests.
-      - If still 403, fallback to curl (if available) which often succeeds on HPC.
-    """
+    """Download to a temporary file, validate it, then atomically install it."""
     import shutil
     import subprocess
+    import tempfile
 
     local_path.parent.mkdir(parents=True, exist_ok=True)
-
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{local_path.name}.", suffix=".part", dir=str(local_path.parent)
+    )
+    os.close(fd)
+    temp_path = Path(temp_name)
     headers = {
-        # Zenodo sometimes blocks python-requests UA; use a common browser UA.
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
         "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
     }
-
+    expected_size = None
     try:
         response = requests.get(
-            url,
-            stream=True,
-            headers=headers,
-            timeout=120,
-            allow_redirects=True,
+            url, stream=True, headers=headers, timeout=(30, 180), allow_redirects=True
         )
+        try:
+            if response.status_code == 403 and shutil.which("curl"):
+                response.close()
+                subprocess.check_call([
+                    shutil.which("curl"), "-L", "--fail", "--retry", "2",
+                    "-o", str(temp_path), url
+                ])
+            else:
+                response.raise_for_status()
+                expected_size = response.headers.get("content-length")
+                total = int(expected_size) if expected_size and expected_size.isdigit() else 0
+                with open(temp_path, "wb") as handle, tqdm(
+                    total=total, unit="B", unit_scale=True, desc=desc
+                ) as progress:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            handle.write(chunk)
+                            progress.update(len(chunk))
+        finally:
+            response.close()
 
-        # If Zenodo/WAF blocks requests, try curl fallback
-        if response.status_code == 403:
-            curl = shutil.which("curl")
-            if curl:
-                # Use -L to follow redirects; --fail to exit non-zero on HTTP errors
-                cmd = [curl, "-L", "--fail", "-o", str(local_path), url]
-                try:
-                    subprocess.check_call(cmd)
-                    return
-                except Exception as e:
-                    raise RuntimeError(f"HTTP 403 with requests and curl fallback failed: {e}")
-
-            # no curl available -> raise with body snippet for diagnosis
-            try:
-                body = response.text[:500]
-            except Exception:
-                body = "<no body>"
-            raise RuntimeError(f"HTTP 403 Forbidden.\nURL={url}\nResponse={body}")
-
-        response.raise_for_status()
-
-        total = int(response.headers.get("content-length", 0))
-        with open(local_path, "wb") as f, tqdm(
-            total=total, unit="B", unit_scale=True, desc=desc
-        ) as pbar:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-                    pbar.update(len(chunk))
-
-    except Exception as e:
-        if local_path.exists():
-            try:
-                local_path.unlink()
-            except Exception:
-                pass
-        raise RuntimeError(f"Download failed: {desc} ({url})\nReason: {str(e)}")
+        actual_size = temp_path.stat().st_size if temp_path.exists() else 0
+        if actual_size <= 0:
+            raise RuntimeError("Downloaded file is empty.")
+        if expected_size and expected_size.isdigit() and actual_size != int(expected_size):
+            raise RuntimeError(
+                f"Incomplete download: expected {expected_size} bytes, received {actual_size}."
+            )
+        os.replace(temp_path, local_path)
+    except Exception as exc:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RuntimeError(f"Download failed: {desc} ({url})\\nReason: {exc}") from exc
 
 # -----------------------------
 # Precomputed species parquet download (psd download --species ath/bna/osa/zma)

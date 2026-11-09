@@ -8,6 +8,7 @@ tqdm>=4.65
 click>=8.1
 requests>=2.25
 joblib>=1.2
+setuptools>=61,<81
 pyarrow>=14.0
 pycaret[full]==3.3.2
 selene-sdk>=0.4.6

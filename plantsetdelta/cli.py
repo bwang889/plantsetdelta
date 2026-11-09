@@ -116,6 +116,24 @@ def _empty_gene_df() -> pd.DataFrame:
     return pd.DataFrame(columns=["gene_id"])
 
 
+def _validate_gene_table(df: pd.DataFrame, name: str, require_label: bool = False) -> pd.DataFrame:
+    required = {"gene_id", "label"} if require_label else {"gene_id"}
+    if not required.issubset(df.columns):
+        raise click.BadParameter(f"{name} must contain columns: {', '.join(sorted(required))}")
+    out = df.copy()
+    if out["gene_id"].isna().any():
+        raise click.BadParameter(f"{name} contains missing gene_id values.")
+    out["gene_id"] = out["gene_id"].astype(str).str.strip()
+    if out["gene_id"].eq("").any():
+        raise click.BadParameter(f"{name} contains empty gene_id values.")
+    if out["gene_id"].duplicated().any():
+        duplicates = out.loc[out["gene_id"].duplicated(), "gene_id"].head(5).tolist()
+        raise click.BadParameter(f"{name} contains duplicate gene_id values, e.g. {duplicates}")
+    if require_label and out["label"].isna().any():
+        raise click.BadParameter(f"{name} contains missing labels.")
+    return out
+
+
 def _kmer_to_gene_id(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return _empty_gene_df()
@@ -274,19 +292,13 @@ def build(
     )
 
     # Read label file
-    label_df = pd.read_csv(label)
-    if not {"gene_id", "label"} <= set(label_df.columns):
-        raise click.BadOptionUsage("--label", "Label file must contain columns: gene_id and label")
-    label_df["gene_id"] = label_df["gene_id"].astype(str)
+    label_df = _validate_gene_table(pd.read_csv(label), "--label", require_label=True)
     # Whitelist for early filtering to avoid loading/merging unrelated genes.
     gene_id_set = set(label_df["gene_id"].tolist())
 
     # If user supplies features: keep your behavior
     if features:
-        feature_df = pd.read_csv(features)
-        if "gene_id" not in feature_df.columns:
-            raise click.BadOptionUsage("--features", "Feature file must contain a gene_id column")
-        feature_df["gene_id"] = feature_df["gene_id"].astype(str)
+        feature_df = _validate_gene_table(pd.read_csv(features), "--features")
         # Filter user-supplied features to the label gene set before merging.
         feature_df = feature_df[feature_df["gene_id"].isin(gene_id_set)]
 
@@ -300,18 +312,12 @@ def build(
         features_only = merged.drop(columns=["gene_id", "label"])
         if features_only.shape[1] == 0:
             raise click.UsageError("No features found in the provided feature file.")
-
-        correlations = features_only.corrwith(merged["label"]).abs()
-        top_n = max(1, int(len(merged) * 0.2))
-        top_features = correlations.nlargest(top_n).index.tolist()
-
-        final_df = merged[["gene_id"] + top_features + ["label"]]
-        final_df.to_csv(out_dir / "train_data_with_gene.csv", index=False)
-        final_df.drop(columns=["gene_id"]).to_csv(out_dir / "train_data.csv", index=False)
-
+        # Keep all features. Supervised selection is fitted inside each training/CV fold.
+        merged.to_csv(out_dir / "train_data_with_gene.csv", index=False)
+        merged.drop(columns=["gene_id"]).to_csv(out_dir / "train_data.csv", index=False)
         click.echo(
-            f"Labels and features merged. Raw saved (raw_all_features*). "
-            f"Top {top_n} features saved to train_data.csv/train_data_with_gene.csv in {out_dir}"
+            "Labels and features merged. Full feature matrix saved; supervised "
+            f"feature selection will occur inside model training in {out_dir}"
         )
         return
 
@@ -480,6 +486,7 @@ def build(
                     tts_upstream=tts_upstream,
                     tts_downstream=tts_downstream,
                     bin_size=BIN_SIZE,
+                    genome_fa=Path(genome_fa),
                 )
                 tf_df_tss = tf_tss_mat.reset_index().rename(columns={"index": "gene_id"}) if use_tss else _empty_gene_df()
                 tf_df_tts = tf_tts_mat.reset_index().rename(columns={"index": "gene_id"}) if use_tts else _empty_gene_df()
@@ -573,24 +580,12 @@ def build(
     label_col = raw_all.pop("label")
     raw_all["label"] = label_col
 
-    # ---------- Feature selection ----------
-    features_only = raw_all.drop(columns=["gene_id", "label"])
-    # Remove all-zero columns to reduce noise and memory before correlation filtering.
-    # This does not change information content because constant-zero features carry no signal.
-    nonzero_cols = features_only.loc[:, (features_only != 0).any(axis=0)].columns
-    raw_all = raw_all[["gene_id"] + nonzero_cols.tolist() + ["label"]]
-
-    features_only = raw_all.drop(columns=["gene_id", "label"])
-    correlations = features_only.corrwith(raw_all["label"]).abs()
-    top_n = max(1, int(len(raw_all) * 0.2))
-    top_features = correlations.nlargest(top_n).index.tolist()
-
-    final_df = raw_all[["gene_id"] + top_features + ["label"]]
-    final_df.to_csv(out_dir / "train_data_with_gene.csv", index=False)
-    final_df.drop(columns=["gene_id"]).to_csv(out_dir / "train_data.csv", index=False)
+    # Keep the full feature matrix. Supervised selection is fitted inside each training/CV fold.
+    raw_all.to_csv(out_dir / "train_data_with_gene.csv", index=False)
+    raw_all.drop(columns=["gene_id"]).to_csv(out_dir / "train_data.csv", index=False)
 
     click.echo(
-        f"Raw matrices saved. Top {top_n} features saved as train_data.csv/train_data_with_gene.csv in {out_dir}\n"
+        f"Raw matrices saved. Full feature matrix saved as train_data.csv/train_data_with_gene.csv in {out_dir}\n"
         f"Mode summary: species={species}, sliding_window={sliding_window}, use_precomputed={use_precomputed}, "
         f"use_tss={use_tss}, use_tts={use_tts}"
     )
@@ -605,13 +600,14 @@ def build(
 @click.option("--n-runs", type=int, default=10, show_default=True, help="Number of training runs (seeds 0..n-1).")
 # Control PyCaret parallelism; set lower values on shared clusters to avoid oversubscription.
 @click.option("--n-jobs", type=int, default=4, show_default=True, help="Number of CPU cores for PyCaret training.")
+@click.option("--group-column", type=str, default=None, help="Optional gene-family/sequence-cluster column for group-disjoint holdout and CV.")
 @click.option(
     "--ml-models",
     multiple=True,
     default=["xgboost", "nb", "lr", "gbc", "rf"],
     help="Subset of models to include. Example: --ml-models nb rf gbc; use 'all' to include all models.",
 )
-def train(data, out_dir, n_runs, n_jobs, ml_models):
+def train(data, out_dir, n_runs, n_jobs, ml_models, group_column):
     """Train multiple models and select the best one. Also exports per-seed model comparisons and ACC/AUC plots."""
     include_models = "all" if (len(ml_models) == 1 and ml_models[0] == "all") else list(ml_models)
 
@@ -622,6 +618,7 @@ def train(data, out_dir, n_runs, n_jobs, ml_models):
         n_runs=n_runs,
         include_models=include_models,
         n_jobs=n_jobs,
+        group_column=group_column,
     )
     click.echo(f"Model training complete. Best model saved to: {model_path}")
 
