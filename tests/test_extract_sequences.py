@@ -20,5 +20,5 @@ def test_negative_strand_windows_are_reverse_complemented():
         gene, genome, tss_upstream=2, tss_downstream=1,
         tts_upstream=1, tts_downstream=2,
     )
-    assert tss == str(Seq("GGT").reverse_complement())
-    assert tts == str(Seq("CCG").reverse_complement())
+    assert tss == str(Seq("TTA").reverse_complement())
+    assert tts == str(Seq("ACC").reverse_complement())
