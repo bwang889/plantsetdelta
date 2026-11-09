@@ -43,25 +43,22 @@ def export_top_features(
     if y_all.isna().any():
         raise ValueError("Target column contains missing labels.")
 
-    model_dir = model_path.parent / "best_models"
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        model_entries = manifest.get("models", [])
-        if not model_entries:
-            raise FileNotFoundError("Training manifest contains no current-run models.")
-        runs = [
-            (
-                model_path.parent / entry["model"],
-                model_path.parent / entry["training_data"],
-            )
-            for entry in model_entries
-        ]
-    else:
-        # Backward compatibility for outputs produced by older PlantSetDelta versions.
-        if not model_dir.exists():
-            raise FileNotFoundError(f"{model_dir} does not exist.")
-        runs = [(path, None) for path in sorted(model_dir.glob("best_model_*.pkl"))]
-
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"{manifest_path} is missing. Re-run `psd train` with PlantSetDelta v0.2.0 "
+            "so feature importance is restricted to the current run's models and training partitions."
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    model_entries = manifest.get("models", [])
+    if not model_entries:
+        raise FileNotFoundError("Training manifest contains no current-run models.")
+    runs = [
+        (
+            model_path.parent / entry["model"],
+            model_path.parent / entry["training_data"],
+        )
+        for entry in model_entries
+    ]
     if not runs:
         raise FileNotFoundError("No per-seed models found.")
 
