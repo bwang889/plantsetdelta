@@ -468,7 +468,7 @@ The validation fold and holdout set are not used to fit the selector.
   Best model per run (seed), where `i` starts at 1. Run-specific names keep earlier model files from being overwritten.
 
 - `best_model.pkl`  
-  Final selected model across runs, chosen by CV Balanced Accuracy.
+  Final selected model family by mean CV Balanced Accuracy across runs; the saved model is the highest-scoring fitted instance of that family.
 - `training_manifest.json`  
   Records the models and corresponding training partitions from the current run.
 
