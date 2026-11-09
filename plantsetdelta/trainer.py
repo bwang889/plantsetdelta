@@ -95,7 +95,10 @@ def _compute_holdout_metrics(pred: pd.DataFrame, target_col: str):
     kappa = float(cohen_kappa_score(y_true, y_pred))
     mcc = float(matthews_corrcoef(y_true, y_pred))
 
-    classes = sorted(pd.unique(y_true).tolist(), key=lambda value: str(value))
+    try:
+        classes = np.unique(y_true).tolist()
+    except TypeError:
+        classes = sorted(pd.unique(y_true).tolist(), key=lambda value: str(value))
     auc = float("nan")
     if len(classes) >= 2:
         probabilities = _get_probability_matrix(pred, classes)
@@ -170,6 +173,7 @@ def train_best_model(
 
     for seed in range(n_runs):
         print(f"Training round {seed + 1}/{n_runs} (seed={seed})...")
+        cv_folds = min(10, int(df[target_col].value_counts().min()))
         setup(
             data=df,
             target=target_col,
@@ -177,6 +181,8 @@ def train_best_model(
             html=False,
             verbose=False,
             n_jobs=n_jobs,
+            fold=cv_folds,
+            fold_shuffle=True,
             custom_pipeline=[("label_correlation_selector", CorrelationTopKSelector())],
         )
 
@@ -244,7 +250,10 @@ def train_best_model(
         for index, model in enumerate(models_list):
             name = model_names[index] if index < len(model_names) else f"model_{index + 1}"
             try:
-                prediction = predict_model(model, raw_score=True)
+                try:
+                    prediction = predict_model(model, raw_score=True)
+                except Exception:
+                    prediction = predict_model(model)
                 metrics = _compute_holdout_metrics(prediction, target_col)
             except Exception as exc:
                 print(f"[plantsetdelta] Holdout metrics unavailable for {name}, seed {seed}: {exc}")
