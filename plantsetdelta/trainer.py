@@ -172,7 +172,8 @@ def train_best_model(
             raise ValueError("Group-aware holdout and CV require at least three distinct groups.")
 
     run_id = uuid.uuid4().hex[:10]
-    model_scores = []
+    model_family_scores = {}
+    model_family_candidates = {}
     all_cv_results = []
     all_test_results = []
     manifest_models = []
@@ -269,7 +270,16 @@ def train_best_model(
         best_score = float(cv_results["Balanced Accuracy"].iloc[0])
         if not np.isfinite(best_score):
             raise RuntimeError(f"Invalid CV Balanced Accuracy for seed {seed}.")
-        model_scores.append((best, best_score))
+
+        model_names = cv_results["Model"].tolist() if "Model" in cv_results.columns else []
+        for index, candidate in enumerate(models_list):
+            if index >= len(model_names):
+                break
+            candidate_name = model_names[index]
+            candidate_score = float(cv_results.iloc[index]["Balanced Accuracy"])
+            if np.isfinite(candidate_score):
+                model_family_scores.setdefault(candidate_name, []).append(candidate_score)
+                model_family_candidates.setdefault(candidate_name, []).append((candidate_score, candidate))
 
         model_name = f"best_model_{run_id}_{seed + 1}"
         save_model(best, str(models_dir / model_name))
@@ -295,7 +305,6 @@ def train_best_model(
         })
 
         test_rows = []
-        model_names = cv_results["Model"].tolist() if "Model" in cv_results.columns else []
         for index, model in enumerate(models_list):
             name = model_names[index] if index < len(model_names) else f"model_{index + 1}"
             try:
@@ -340,8 +349,21 @@ def train_best_model(
                 out_pdf=filename, title=title,
             )
 
-    best_final, best_score = max(model_scores, key=lambda item: item[1])
-    print(f"Selecting final best model by Balanced Accuracy (CV): {best_score:.4f}")
+    if not model_family_scores:
+        raise RuntimeError("No finite cross-validation model scores were collected.")
+    mean_cv_scores = {
+        name: float(np.mean(scores))
+        for name, scores in model_family_scores.items()
+        if scores
+    }
+    selected_model_name = max(mean_cv_scores, key=mean_cv_scores.get)
+    best_score, best_final = max(
+        model_family_candidates[selected_model_name], key=lambda item: item[0]
+    )
+    print(
+        f"Selecting {selected_model_name} by mean CV Balanced Accuracy across runs: "
+        f"{mean_cv_scores[selected_model_name]:.4f}"
+    )
     model_path = out_dir / "best_model"
     save_model(best_final, str(model_path))
 
@@ -351,6 +373,12 @@ def train_best_model(
         "target": target_col,
         "group_column": group_column,
         "group_splits": group_splits,
+        "model_selection": {
+            "metric": "Balanced Accuracy",
+            "selection_rule": "highest mean CV score across random seeds; save the highest-scoring fitted instance of that model family",
+            "selected_model": selected_model_name,
+            "mean_cv_balanced_accuracy_by_model": mean_cv_scores,
+        },
         "feature_selection": "binary: absolute Pearson correlation; multiclass: ANOVA F-score; top max(1, floor(n_training_samples * 0.2)); fitted within each CV fold",
         "models": manifest_models,
     }
