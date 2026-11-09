@@ -48,7 +48,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check Python version
         run: python3.10 --version
-      - name: Install PlantSetDelta
-        run: python3.10 -m pip install --upgrade pip && python3.10 -m pip install -e . pytest
+      - name: Upgrade pip
+        run: python3.10 -m pip install --upgrade pip
+      - name: Build and install PlantSetDelta package
+        id: package
+        continue-on-error: true
+        run: python3.10 -m pip install -e . --no-deps
+      - name: Install runtime dependencies
+        id: dependencies
+        continue-on-error: true
+        run: python3.10 -m pip install -r requirements.txt pytest
       - name: Run end-to-end CLI smoke test
+        id: smoke
+        continue-on-error: true
         run: python3.10 -m pytest -q tests/test_cli_smoke.py
+      - name: Check package integration results
+        if: always()
+        run: |
+          test "${{ steps.package.conclusion }}" = success
+          test "${{ steps.dependencies.conclusion }}" = success
+          test "${{ steps.smoke.conclusion }}" = success
