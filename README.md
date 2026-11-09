@@ -117,7 +117,7 @@ PlantSetDelta uses a local cache directory for large files (parquet features, de
 
 - Environment variable: `PSD_DATA_DIR`
 
-If not set, the package uses its internal `plantsetdelta/data` directory (not recommended for cluster usage).
+If not set, the package uses `~/.cache/plantsetdelta/data`.
 
 ### Recommended on HPC
 
