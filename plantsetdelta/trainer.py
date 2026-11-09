@@ -118,16 +118,12 @@ def _compute_holdout_metrics(pred: pd.DataFrame, target_col: str):
     return acc, auc, rec, prec, f1, kappa, mcc, bacc
 
 
-def _clear_previous_run_outputs(models_dir: Path, results_cv_dir: Path, results_test_dir: Path):
-    # Remove only files owned by this command; preserve unrelated user files.
-    if models_dir.exists():
-        for path in models_dir.glob("best_model_*.pkl"):
-            path.unlink()
-    for folder in (results_cv_dir, results_test_dir):
+def _prepare_run_output_dirs(models_dir: Path, results_cv_dir: Path, results_test_dir: Path):
+    # Keep previous outputs intact. training_manifest.json explicitly lists only
+    # models/training partitions produced by the current run, so stale files are
+    # never included in the current feature-importance summary.
+    for folder in (models_dir, results_cv_dir, results_test_dir):
         folder.mkdir(parents=True, exist_ok=True)
-        for pattern in ("model_comparison_*_batch_*.csv", "training_data_seed_*.csv"):
-            for path in folder.glob(pattern):
-                path.unlink()
 
 
 def train_best_model(
@@ -150,7 +146,7 @@ def train_best_model(
     models_dir.mkdir(exist_ok=True)
     results_cv_dir = out_dir / "model_results_cv"
     results_test_dir = out_dir / "model_results_test"
-    _clear_previous_run_outputs(models_dir, results_cv_dir, results_test_dir)
+    _prepare_run_output_dirs(models_dir, results_cv_dir, results_test_dir)
 
     df = pd.read_csv(feature_csv)
     if target_col not in df.columns:
