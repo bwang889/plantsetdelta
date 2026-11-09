@@ -173,7 +173,7 @@ def train_best_model(
 
     run_id = uuid.uuid4().hex[:10]
     model_family_scores = {}
-    model_family_candidates = {}
+    model_family_best_candidate = {}
     all_cv_results = []
     all_test_results = []
     manifest_models = []
@@ -279,7 +279,9 @@ def train_best_model(
             candidate_score = float(cv_results.iloc[index]["Balanced Accuracy"])
             if np.isfinite(candidate_score):
                 model_family_scores.setdefault(candidate_name, []).append(candidate_score)
-                model_family_candidates.setdefault(candidate_name, []).append((candidate_score, candidate))
+                current_best = model_family_best_candidate.get(candidate_name)
+                if current_best is None or candidate_score > current_best[0]:
+                    model_family_best_candidate[candidate_name] = (candidate_score, candidate)
 
         model_name = f"best_model_{run_id}_{seed + 1}"
         save_model(best, str(models_dir / model_name))
@@ -357,9 +359,7 @@ def train_best_model(
         if scores
     }
     selected_model_name = max(mean_cv_scores, key=mean_cv_scores.get)
-    best_score, best_final = max(
-        model_family_candidates[selected_model_name], key=lambda item: item[0]
-    )
+    best_score, best_final = model_family_best_candidate[selected_model_name]
     print(
         f"Selecting {selected_model_name} by mean CV Balanced Accuracy across runs: "
         f"{mean_cv_scores[selected_model_name]:.4f}"
