@@ -455,7 +455,8 @@ During `psd build`, features are filtered to:
 
 Supervised feature selection is performed during `psd train`, not during `psd build`. The selector is fitted
 within each cross-validation training fold and uses the top `max(1, floor(n_training_samples * 0.2))`
-features by absolute Pearson correlation. The validation fold and holdout set are not used to fit the selector.
+features by absolute Pearson correlation for binary labels or ANOVA F-score for multiclass labels.
+The validation fold and holdout set are not used to fit the selector.
 
 ### 2) Training outputs (`psd train`)
 
