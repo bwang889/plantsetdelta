@@ -464,8 +464,8 @@ The validation fold and holdout set are not used to fit the selector.
 
 #### Model files
 
-- `best_models/best_model_<i>.pkl`  
-  Best model per run (seed), where `i` starts at 1.
+- `best_models/best_model_<run_id>_<i>.pkl`  
+  Best model per run (seed), where `i` starts at 1. Run-specific names keep earlier model files from being overwritten.
 
 - `best_model.pkl`  
   Final selected model across runs, chosen by CV Balanced Accuracy.
@@ -476,10 +476,10 @@ The validation fold and holdout set are not used to fit the selector.
 
 Per-seed tables (stored under `model_results/`):
 
-- `model_results/model_comparison_cv_batch_<seed>.csv`  
+- `model_results_cv/model_comparison_cv_batch_<seed>.csv`  
   Training-set cross-validation comparison for that seed.
 
-- `model_results/model_comparison_test_batch_<seed>.csv`  
+- `model_results_test/model_comparison_test_batch_<seed>.csv`  
   Holdout test comparison for that seed.
 
 Aggregated tables (stored at the root of `--out-dir`):
