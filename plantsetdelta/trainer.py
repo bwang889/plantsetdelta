@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import uuid
 from pathlib import Path
 from typing import Optional, Union, List, Tuple
@@ -269,14 +268,15 @@ def train_best_model(
         model_file = models_dir / f"{model_name}.pkl"
 
         # Save only the training partition for later feature-importance estimation.
-        X_train = get_config("X_train")
-        train_index = getattr(X_train, "index", None)
-        if train_index is None or not train_index.isin(df.index).all():
+        # PyCaret's "train" slot is the original, untransformed training
+        # partition; X_train is transformed and must not be used here.
+        training_data = get_config("train")
+        if not isinstance(training_data, pd.DataFrame) or target_col not in training_data.columns:
             raise RuntimeError(
-                "PyCaret did not expose original training-row indices; cannot save a "
-                "leakage-free training partition for feature-importance analysis."
+                "PyCaret did not expose the original training partition; cannot "
+                "save a leakage-free feature-importance dataset."
             )
-        training_data = df.loc[train_index].copy()
+        training_data = training_data.copy()
         training_path = results_cv_dir / f"training_data_{run_id}_seed_{seed}.csv"
         training_data.to_csv(training_path, index=False)
         manifest_models.append({
