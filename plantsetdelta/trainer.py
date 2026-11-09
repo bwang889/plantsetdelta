@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import uuid
 from pathlib import Path
 from typing import Optional, Union, List, Tuple
 
@@ -171,6 +172,7 @@ def train_best_model(
         if df[group_column].nunique() < 3:
             raise ValueError("Group-aware holdout and CV require at least three distinct groups.")
 
+    run_id = uuid.uuid4().hex[:10]
     model_scores = []
     all_cv_results = []
     all_test_results = []
@@ -262,7 +264,7 @@ def train_best_model(
             raise RuntimeError(f"Invalid CV Balanced Accuracy for seed {seed}.")
         model_scores.append((best, best_score))
 
-        model_name = f"best_model_{seed + 1}"
+        model_name = f"best_model_{run_id}_{seed + 1}"
         save_model(best, str(models_dir / model_name))
         model_file = models_dir / f"{model_name}.pkl"
 
@@ -275,7 +277,7 @@ def train_best_model(
                 "leakage-free training partition for feature-importance analysis."
             )
         training_data = df.loc[train_index].copy()
-        training_path = results_cv_dir / f"training_data_seed_{seed}.csv"
+        training_path = results_cv_dir / f"training_data_{run_id}_seed_{seed}.csv"
         training_data.to_csv(training_path, index=False)
         manifest_models.append({
             "model": str(Path("best_models") / model_file.name),
@@ -336,6 +338,7 @@ def train_best_model(
     save_model(best_final, str(model_path))
 
     manifest = {
+        "run_id": run_id,
         "n_runs": n_runs,
         "target": target_col,
         "group_column": group_column,
