@@ -29,16 +29,21 @@ def export_top_features(
     df = pd.read_csv(feature_csv)
     if target_col not in df.columns:
         raise ValueError(f"Target column '{target_col}' not found in: {feature_csv}")
-    X_all = df.drop(columns=[target_col, "gene_id"], errors="ignore")
+    model_path = Path(model_path)
+    manifest_path = model_path.parent / "training_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    group_column = manifest.get("group_column")
+    drop_columns = [target_col, "gene_id"]
+    if group_column:
+        drop_columns.append(group_column)
+    X_all = df.drop(columns=drop_columns, errors="ignore")
     y_all = df[target_col]
     if X_all.empty or X_all.shape[1] == 0:
         raise ValueError("No feature columns found.")
     if y_all.isna().any():
         raise ValueError("Target column contains missing labels.")
 
-    model_path = Path(model_path)
     model_dir = model_path.parent / "best_models"
-    manifest_path = model_path.parent / "training_manifest.json"
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         model_entries = manifest.get("models", [])
@@ -74,7 +79,7 @@ def export_top_features(
             train_df = pd.read_csv(training_file)
             if target_col not in train_df.columns:
                 raise ValueError(f"{training_file} does not contain target column {target_col}.")
-            X = train_df.drop(columns=[target_col])
+            X = train_df.drop(columns=drop_columns, errors="ignore")
             y = train_df[target_col]
         else:
             X, y = X_all, y_all
